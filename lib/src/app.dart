@@ -8,7 +8,8 @@ import 'export/export_service.dart';
 import 'repository/finance_repository.dart';
 import 'sync/folder_sync_coordinator.dart';
 import 'web/finance_asset_server.dart';
-import 'widgets/finance_logo.dart';
+import 'widgets/app_theme.dart';
+import 'widgets/finance_host_toolbar.dart';
 
 class FinanceOsApp extends StatelessWidget {
   const FinanceOsApp({
@@ -28,13 +29,7 @@ class FinanceOsApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: 'Finance OS Synced',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff4f46e5),
-        brightness: Brightness.dark,
-      ),
-      useMaterial3: true,
-    ),
+    theme: financeHostTheme(),
     home: FinanceOsShell(
       repository: repository,
       sync: sync,
@@ -66,19 +61,43 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
   InAppWebViewController? _controller;
   StreamSubscription<Map<String, dynamic>>? _stateSubscription;
   StreamSubscription<FolderSyncStatus>? _syncSubscription;
-  FolderSyncStatus _status = const FolderSyncStatus(
-    phase: FolderSyncPhase.disabled,
-  );
+  late final ValueNotifier<FolderSyncStatus> _statusNotifier;
+  late final Widget _webView;
   bool _pageReady = false;
+
+  FolderSyncStatus get _status => _statusNotifier.value;
 
   @override
   void initState() {
     super.initState();
-    _status = widget.sync.currentStatus;
+    _statusNotifier = ValueNotifier(widget.sync.currentStatus);
+    _webView = InAppWebView(
+      webViewEnvironment: widget.webViewEnvironment,
+      initialUrlRequest: URLRequest(url: WebUri(widget.server.uri.toString())),
+      initialSettings: InAppWebViewSettings(
+        javaScriptEnabled: true,
+        databaseEnabled: false,
+        domStorageEnabled: true,
+        transparentBackground: false,
+        supportZoom: false,
+      ),
+      onWebViewCreated: (controller) {
+        _controller = controller;
+        _registerHandlers(controller);
+      },
+      shouldOverrideUrlLoading: (controller, action) async {
+        final uri = action.request.url;
+        if (uri == null) return NavigationActionPolicy.CANCEL;
+        return uri.host == widget.server.uri.host &&
+                uri.port == widget.server.uri.port
+            ? NavigationActionPolicy.ALLOW
+            : NavigationActionPolicy.CANCEL;
+      },
+    );
     _stateSubscription = widget.repository.changes.listen(_pushStateToWeb);
     _syncSubscription = widget.sync.statuses.listen((status) {
       if (!mounted) return;
-      setState(() => _status = status);
+      _statusNotifier.value = status;
       _controller?.evaluateJavascript(
         source:
             'window.financeNativeBridge?.syncStatus(${jsonEncode(status.phase.name)});',
@@ -90,6 +109,7 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
   void dispose() {
     _stateSubscription?.cancel();
     _syncSubscription?.cancel();
+    _statusNotifier.dispose();
     unawaited(widget.sync.dispose());
     unawaited(widget.repository.dispose());
     unawaited(widget.server.stop());
@@ -106,7 +126,10 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
         handlerName: 'saveFinanceState',
         callback: (arguments) async {
           if (arguments.isEmpty || arguments.first is! String) return false;
-          await widget.repository.saveFromWeb(arguments.first as String);
+          await widget.repository.saveFromWeb(
+            arguments.first as String,
+            notifyChanges: false,
+          );
           return true;
         },
       )
@@ -323,100 +346,17 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
         '${two(value.hour)}:${two(value.minute)}';
   }
 
-  String get _statusLabel => switch (_status.phase) {
-    FolderSyncPhase.disabled => 'Sync off',
-    FolderSyncPhase.idle => 'Synced',
-    FolderSyncPhase.syncing => 'Syncing…',
-    FolderSyncPhase.blocked => 'Sync blocked',
-    FolderSyncPhase.error => 'Sync error',
-  };
-
-  IconData get _statusIcon => switch (_status.phase) {
-    FolderSyncPhase.disabled => Icons.sync_disabled,
-    FolderSyncPhase.idle => Icons.cloud_done_outlined,
-    FolderSyncPhase.syncing => Icons.sync,
-    FolderSyncPhase.blocked => Icons.gpp_bad_outlined,
-    FolderSyncPhase.error => Icons.sync_problem,
-  };
-
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      toolbarHeight: 48,
-      titleSpacing: 12,
-      title: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          FinanceLogo(size: 24),
-          SizedBox(width: 8),
-          Text(
-            'Finance OS',
-            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton.icon(
-          onPressed: widget.sync.root == null
-              ? _chooseFolder
-              : _status.phase == FolderSyncPhase.blocked
-              ? _showSafetyCenter
-              : widget.sync.syncNow,
-          icon: Icon(_statusIcon, size: 18),
-          label: Text(_statusLabel),
-        ),
-        PopupMenuButton<String>(
-          tooltip: 'Finance OS actions',
-          onSelected: (value) async {
-            switch (value) {
-              case 'folder':
-                await _chooseFolder();
-              case 'sync':
-                await widget.sync.syncNow();
-              case 'html':
-                await _runPageFunction('downloadPortableHtml');
-              case 'json':
-                await _runPageFunction('exportAll');
-              case 'safety':
-                await _showSafetyCenter();
-            }
-          },
-          itemBuilder: (_) => const [
-            PopupMenuItem(
-              value: 'folder',
-              child: Text('Choose Conduit folder'),
-            ),
-            PopupMenuItem(value: 'sync', child: Text('Sync now')),
-            PopupMenuItem(value: 'safety', child: Text('Safety & restore')),
-            PopupMenuDivider(),
-            PopupMenuItem(value: 'html', child: Text('Export portable HTML')),
-            PopupMenuItem(value: 'json', child: Text('Export JSON backup')),
-          ],
-        ),
-      ],
+    appBar: FinanceHostToolbar(
+      statusListenable: _statusNotifier,
+      hasSyncFolder: () => widget.sync.root != null,
+      chooseFolder: _chooseFolder,
+      syncNow: widget.sync.syncNow,
+      showSafetyCenter: _showSafetyCenter,
+      exportHtml: () => _runPageFunction('downloadPortableHtml'),
+      exportJson: () => _runPageFunction('exportAll'),
     ),
-    body: InAppWebView(
-      webViewEnvironment: widget.webViewEnvironment,
-      initialUrlRequest: URLRequest(url: WebUri(widget.server.uri.toString())),
-      initialSettings: InAppWebViewSettings(
-        javaScriptEnabled: true,
-        databaseEnabled: false,
-        domStorageEnabled: true,
-        transparentBackground: false,
-        supportZoom: false,
-      ),
-      onWebViewCreated: (controller) {
-        _controller = controller;
-        _registerHandlers(controller);
-      },
-      shouldOverrideUrlLoading: (controller, action) async {
-        final uri = action.request.url;
-        if (uri == null) return NavigationActionPolicy.CANCEL;
-        return uri.host == widget.server.uri.host &&
-                uri.port == widget.server.uri.port
-            ? NavigationActionPolicy.ALLOW
-            : NavigationActionPolicy.CANCEL;
-      },
-    ),
+    body: _webView,
   );
 }

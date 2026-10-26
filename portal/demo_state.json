@@ -1,0 +1,20 @@
+{
+  "settings": {
+    "owner": "Demo workspace",
+    "brandSubtitle": "Personal workspace",
+    "taxYear": "2026-27",
+    "incomeYearStart": "2025-07-01",
+    "incomeYearEnd": "2026-06-30"
+  },
+  "accounts": [
+    { "id": "demo-cash", "name": "Everyday wallet", "type": "cash", "balance": 12000, "active": true },
+    { "id": "demo-bank", "name": "Savings account", "type": "bank", "balance": 350000, "active": true }
+  ],
+  "transactions": [
+    { "id": "demo-1", "name": "Monthly salary", "date": "2026-06-01", "type": "income", "category": "Salary", "amount": 82000, "accountId": "demo-bank" },
+    { "id": "demo-2", "name": "Home and utilities", "date": "2026-06-03", "type": "expense", "category": "Utilities", "amount": 18000, "accountId": "demo-bank" },
+    { "id": "demo-3", "name": "Groceries", "date": "2026-06-08", "type": "expense", "category": "Food/Groceries", "amount": 6500, "accountId": "demo-cash" },
+    { "id": "demo-4", "name": "Project payment", "date": "2026-05-15", "type": "income", "category": "Other income", "amount": 45000, "accountId": "demo-bank" }
+  ],
+  "goals": [{ "id": "demo-goal", "name": "Emergency fund", "target": 500000, "current": 350000, "targetDate": "2027-06-30" }]
+}

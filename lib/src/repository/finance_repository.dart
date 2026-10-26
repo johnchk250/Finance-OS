@@ -360,12 +360,20 @@ class FinanceRepository {
     );
   });
 
-  Future<List<FinanceOperation>> saveFromWeb(String serializedState) =>
-      _serializeMutation(() => _saveFromWeb(serializedState));
+  /// The originating WebView already displays a local edit. It can opt out of
+  /// the change echo while still awaiting durable persistence and operations.
+  /// Restores and remote changes continue to notify the view normally.
+  Future<List<FinanceOperation>> saveFromWeb(
+    String serializedState, {
+    bool notifyChanges = true,
+  }) => _serializeMutation(
+    () => _saveFromWeb(serializedState, notifyChanges: notifyChanges),
+  );
 
   Future<List<FinanceOperation>> _saveFromWeb(
     String serializedState, {
     bool createSafetyBackup = true,
+    bool notifyChanges = true,
   }) async {
     final nextState = _decodeMap(serializedState);
     _advanceSequencePastKnownVectors();
@@ -423,7 +431,7 @@ class FinanceRepository {
 
     _state = cloneJsonMap(nextState);
     await _persist();
-    if (operations.isNotEmpty) _changes.add(state);
+    if (notifyChanges && operations.isNotEmpty) _changes.add(state);
     return operations;
   }
 

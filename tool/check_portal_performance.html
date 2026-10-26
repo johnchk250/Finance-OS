@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Finance OS rendering regression checks</title>
+<style>body{font:16px system-ui;padding:24px;color:#173b30}iframe{width:100%;height:600px;border:1px solid #ccc}li{padding:5px}</style>
+<h1>Rendering regression checks</h1>
+<p>Synthetic demo only. Measures render work and DOM stability; timings depend on this machine.</p>
+<ul id="results"></ul>
+<iframe id="preview" title="Demo portal" src="/index.html"></iframe>
+<script>
+const preview = document.querySelector('#preview');
+function check(condition, label) {
+  const line = document.createElement('li');
+  line.textContent = (condition ? 'PASS: ' : 'FAIL: ') + label;
+  document.querySelector('#results').append(line);
+  if (!condition) throw new Error(label);
+}
+preview.onload = async () => {
+  try {
+    const app = preview.contentWindow, doc = app.document;
+    let renders = 0, charts = 0;
+    const originalRender = app.render, originalCharts = app.drawCharts;
+    app.render = (...args) => { renders++; return originalRender(...args); };
+    app.drawCharts = (...args) => { charts++; return originalCharts(...args); };
+    const originalNav = doc.querySelector('#nav [data-view="home"]');
+    const timings = [];
+    const destinations = ['transactions', 'tax', 'planning', 'reports', 'home'];
+    for (let i = 0; i < 30; i++) {
+      const start = performance.now();
+      doc.querySelector(`#nav [data-view="${destinations[i % destinations.length]}"]`).click();
+      // Include style/layout work, not just HTML generation.
+      doc.querySelector('#view').getBoundingClientRect();
+      timings.push(performance.now() - start);
+    }
+    check(originalNav === doc.querySelector('#nav [data-view="home"]'), 'Navigation retains the same DOM nodes across 30 switches');
+    check(renders === 30, `One view render per switch (${renders} / 30)`);
+    check(charts === 30, `One chart pass per switch (${charts} / 30)`);
+    const viewChild = doc.querySelector('#view').firstElementChild;
+    const scroll = doc.querySelector('#view');
+    scroll.scrollTop = 150;
+    doc.querySelector('#nav [data-view="home"]').click();
+    check(viewChild === doc.querySelector('#view').firstElementChild && renders === 30, 'Clicking the current module does not rebuild content');
+    check(scroll.scrollTop === 150, 'Clicking the current module preserves scroll');
+    check(app.getComputedStyle(doc.querySelector('.topbar')).backdropFilter === 'none', 'Scrolling chrome has no backdrop blur');
+    const max = Math.max(...timings), sorted = [...timings].sort((a,b) => a-b);
+    check(true, `Navigation sample: median ${sorted[15].toFixed(1)} ms; max ${max.toFixed(1)} ms`);
+    document.title = 'PASS — Finance OS rendering checks';
+  } catch (error) { document.title = 'FAIL — rendering checks'; console.error(error); }
+};
+</script>
+</html>

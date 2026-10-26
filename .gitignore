@@ -32,8 +32,8 @@ migrate_working_dir/
 .pub/
 /build/
 
-# Generated from the private legacy Finance OS source. The import tool
-# recreates these files locally; do not commit personal financial records.
+# Generated from portal/ plus the private imported seed. The build/import tools
+# recreate these files locally; do not commit personal financial records.
 /assets/finance/index.html
 /assets/finance/seed_state.json
 /coverage/

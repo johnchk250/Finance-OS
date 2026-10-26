@@ -106,7 +106,8 @@ portable HTML, so the exported file remains standalone.
 
 ```text
 build_release.bat     interactive and CLI release builder for Windows and Android APK
-assets/finance/       generated legacy portal and seed state
+portal/               maintained HTML shell, styles, JavaScript, synthetic demo
+assets/finance/       generated standalone portal and private seed state (ignored)
 lib/src/model/        snapshots, operation schema, projection, version vectors
 lib/src/repository/   disposable cache and deterministic merge engine
 lib/src/sync/         Conduit-folder adapters and sync coordinator
@@ -114,18 +115,21 @@ lib/src/safety/       staged validation and rotating local restore vault
 lib/src/web/          loopback-only asset server
 lib/src/export/       native portable HTML / JSON save dialogs
 lib/src/widgets/      native Flutter UI widgets (e.g. vector FinanceLogo)
-tool/                 repeatable legacy HTML importer and icon asset generator
+tool/                 portal builder, record importer, checks, icon generator
 android/              Android app and Storage Access Framework adapter
 windows/              Windows desktop runner
 ```
 
-The large legacy page is isolated as a generated asset rather than mixed into
-the native persistence/sync code. A later UI-by-UI refactor can split its CSS
-and JavaScript without changing the data protocol.
+The portal source is separated into shell, design system, navigation, model,
+calculations, feature views, forms, bootstrap, and native bridge. The builder
+inlines those files in a fixed order so portable HTML remains fully standalone.
+The JavaScript still shares the original execution scope; feature extraction
+does not change financial formulas or the native persistence/sync protocol.
+See [architecture review](docs/architecture-refresh.md) for decisions and limits.
 
 ## Tooling
 
-### Re-import the legacy portal
+### Import records from a legacy or portable HTML file
 
 From the project root:
 
@@ -135,8 +139,42 @@ dart run tool/import_legacy.dart `
   'assets\finance'
 ```
 
-This preserves the embedded state and calculation code, injects the native
-storage bridge, and ensures portable exports strip that bridge again.
+This imports the embedded state and rebuilds with the maintained `portal/`
+sources. It does not import styling or executable scripts from the input file.
+Private financial records remain in ignored `assets/finance/` files. Portable
+exports strip the native bridge and keep all required CSS and JavaScript inline.
+
+### Edit and rebuild the portal
+
+```powershell
+dart run tool/build_portal.dart
+dart run tool/build_portal.dart --check
+```
+
+Edit `portal/`, not the generated HTML. The release builder regenerates the
+portal before each platform build. For direct `flutter run` or `flutter build`,
+run the portal builder first.
+
+For a safe preview with synthetic records (never overwrites your private seed):
+
+```powershell
+dart run tool/build_portal.dart --demo
+node tool/check_portal.mjs
+node tool/check_native_bridge.mjs
+node tool/serve_portal.mjs
+```
+
+Open [the demo](http://127.0.0.1:43990) and
+[portable integration checks](http://127.0.0.1:43990/checks.html) while the server
+is running. [Rendering regression checks](http://127.0.0.1:43990/performance.html)
+check navigation node stability and render counts. You can also open
+`build/portal-preview/index.html` directly.
+The demo is an independent browser dataset; do not choose a live sync
+folder for UI testing. No npm packages are required by the builder or checks.
+
+The workspace has grouped desktop navigation, mobile quick navigation plus
+**More**, a search shortcut (`Ctrl/Cmd+K`), and a **•••** menu for portable export,
+linked-file save, undo, and settings. `Escape` closes the record drawer.
 
 ### Generate app icons
 
@@ -163,6 +201,7 @@ You can use the root `build_release.bat` script for interactive or one-line rele
 
 ```powershell
 flutter pub get
+dart run tool/build_portal.dart
 flutter analyze
 flutter test
 flutter build windows --release

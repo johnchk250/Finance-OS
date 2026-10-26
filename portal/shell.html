@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover">
+  <title>Finance OS — Personal workspace</title>
+  <script id="embeddedState" type="application/json">{{SEED_STATE}}</script>
+  <script>try { if (localStorage.getItem("financeOS_theme") === "dark") document.documentElement.setAttribute("data-theme", "dark"); } catch (_) {}</script>
+  <style>
+{{STYLES}}
+  </style>
+</head>
+<body class="workspace-shell">
+  <a class="skip-link" href="#view">Skip to content</a>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">৳</div>
+        <div><strong>Finance OS</strong><span id="brandSubtitle">Personal workspace</span></div>
+      </div>
+      <nav id="nav" class="nav" aria-label="Workspace"></nav>
+      <div class="sidebar-footer"><span class="workspace-label">YOUR FINANCIAL WORKSPACE</span><p>A clearer view of your money.</p></div>
+    </aside>
+    <main>
+      <header class="topbar">
+        <div class="page-heading"><div class="title"><h1 id="viewTitle">Overview</h1><p id="viewSubtitle">Your finances, at a glance</p></div></div>
+        <div id="periodBadgeWrap">
+          <button id="periodBadge" type="button" aria-haspopup="menu" aria-expanded="false" title="Change assessment year"><span id="periodBadgeLabel">Assessment year</span><span aria-hidden="true">⌄</span></button>
+          <div id="taxYearMenu" class="tax-year-menu" role="menu" aria-label="Assessment year"></div>
+        </div>
+        <div class="toolbar">
+          <div class="search-wrap">
+            <input id="globalSearch" class="search" type="search" aria-label="Search all records" placeholder="Search all records…" autocomplete="off">
+            <button id="clearSearch" class="clear-search" type="button" aria-label="Clear search" title="Clear search">×</button>
+          </div>
+          <button id="addBtn" class="primary">+ Add record</button>
+          <button id="themeToggleBtn" class="icon" title="Toggle color theme" aria-label="Toggle dark mode">◐</button>
+          <details class="toolbar-secondary" id="workspaceActions">
+            <summary aria-label="Workspace actions" title="Export, save, and settings">•••</summary>
+            <div class="toolbar-menu" id="workspaceActionMenu">
+              <button id="savePortableBtn" title="Download a standalone HTML backup">Export portable HTML</button>
+              <button id="overwriteFileBtn" title="Save to a linked HTML file">Link / save file</button>
+              <button id="settingsBtn">Settings</button>
+            </div>
+          </details>
+        </div>
+      </header>
+      <section id="view" tabindex="-1" aria-label="Current page"></section>
+    </main>
+  </div>
+  <nav id="mobileNav" class="mobile-nav" aria-label="Quick navigation"></nav>
+  <dialog id="moduleMenu" class="module-menu" aria-labelledby="moduleMenuTitle">
+    <div class="module-menu-head"><div><span class="workspace-label">WORKSPACE</span><h2 id="moduleMenuTitle" class="module-menu-title">All modules</h2></div><button id="closeModuleMenu" class="icon" aria-label="Close navigation">×</button></div>
+    <nav id="moduleMenuItems" class="module-menu-grid" aria-label="All modules"></nav>
+  </dialog>
+  <div id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
+      <div class="drawer-head"><h2 id="drawerTitle">Add record</h2><button id="closeDrawer" class="icon" title="Close" aria-label="Close form">×</button></div>
+      <div id="drawerBody"></div>
+    </div>
+  </div>
+  <script>
+{{APPLICATION}}
+  </script>
+  <script id="financeNativeBridge">
+{{NATIVE_BRIDGE}}
+  </script>
+</body>
+</html>

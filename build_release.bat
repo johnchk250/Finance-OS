@@ -103,6 +103,12 @@ if %ERRORLEVEL% neq 0 (
     goto :end
 )
 
+call dart run tool/build_portal.dart
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Portal generation failed.
+    goto :end
+)
+
 call flutter build windows --release
 if %ERRORLEVEL% neq 0 (
     echo.
@@ -128,6 +134,12 @@ echo =======================================================
 call flutter pub get
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] 'flutter pub get' failed.
+    goto :end
+)
+
+call dart run tool/build_portal.dart
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Portal generation failed.
     goto :end
 )
 
