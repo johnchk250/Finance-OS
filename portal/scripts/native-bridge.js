@@ -104,6 +104,7 @@
         refreshFromNative(parsed);
         lastSent = JSON.stringify(state);
       }
+      if (typeof ensureWorkspacePinLock === "function") ensureWorkspacePinLock();
 
       const browserSave = save;
       save = function(...args) {
@@ -145,8 +146,8 @@
         syncTheme(theme) {
           return callNative("syncTheme", theme);
         },
-        onAppResume() {
-          if (typeof checkPinLockOnResume === "function") checkPinLockOnResume();
+        requestPinUnlock() {
+          return callNative("requestPinUnlock");
         }
       };
 
@@ -166,6 +167,9 @@
       }
 
       await callNative("bridgeReady");
+      if (typeof isWorkspaceLocked === "function" && isWorkspaceLocked()) {
+        await callNative("requestPinUnlock");
+      }
 
       try {
         if (typeof document !== "undefined" && document.documentElement?.getAttribute) {

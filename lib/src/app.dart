@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
@@ -131,9 +132,6 @@ class _FinanceOsShellState extends State<FinanceOsShell>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       unawaited(widget.sync.syncNow());
-      _controller?.evaluateJavascript(
-        source: 'window.financeNativeBridge?.onAppResume?.();',
-      );
     }
   }
 
@@ -242,7 +240,123 @@ class _FinanceOsShellState extends State<FinanceOsShell>
           _pushSyncStatusToWeb(_status);
           return true;
         },
+      )
+      ..addJavaScriptHandler(
+        handlerName: 'requestPinUnlock',
+        callback: (_) async {
+          if (!Platform.isWindows) return false;
+          return _showNativePinUnlockDialog();
+        },
       );
+  }
+
+  Future<bool> _showNativePinUnlockDialog() async {
+    final webViewController = _controller;
+    if (webViewController == null) return false;
+
+    final pinController = TextEditingController();
+    final pinFocusNode = FocusNode();
+    var invalidPin = false;
+    var checkingPin = false;
+    var canClose = false;
+    var focusRequested = false;
+
+    try {
+      final dialog = showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) => PopScope<bool>(
+          canPop: canClose,
+          child: StatefulBuilder(
+            builder: (context, setDialogState) {
+              Future<void> submitPin() async {
+                if (checkingPin) return;
+                setDialogState(() => checkingPin = true);
+                final result = await webViewController.evaluateJavascript(
+                  source:
+                      'window.financeOSUnlockWithPin?.(${jsonEncode(pinController.text.trim())}) === true',
+                );
+                if (!dialogContext.mounted) return;
+
+                if (result == true) {
+                  setDialogState(() => canClose = true);
+                  await WidgetsBinding.instance.endOfFrame;
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop(true);
+                  }
+                  return;
+                }
+
+                setDialogState(() {
+                  checkingPin = false;
+                  invalidPin = true;
+                });
+                pinController.selection = TextSelection(
+                  baseOffset: 0,
+                  extentOffset: pinController.text.length,
+                );
+                pinFocusNode.requestFocus();
+              }
+
+              if (!focusRequested) {
+                focusRequested = true;
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (pinFocusNode.canRequestFocus) {
+                    pinFocusNode.requestFocus();
+                  }
+                });
+              }
+
+              return AlertDialog(
+                icon: const Icon(Icons.lock_outline),
+                title: const Text('Workspace Locked'),
+                content: SizedBox(
+                  width: 360,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text('Enter your PIN to unlock Finance OS.'),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: pinController,
+                        focusNode: pinFocusNode,
+                        autofocus: true,
+                        obscureText: true,
+                        keyboardType: TextInputType.number,
+                        textInputAction: TextInputAction.done,
+                        maxLength: 8,
+                        onSubmitted: (_) => unawaited(submitPin()),
+                        decoration: InputDecoration(
+                          labelText: 'PIN',
+                          hintText: '••••',
+                          counterText: '',
+                          errorText: invalidPin
+                              ? 'Incorrect PIN. Please try again.'
+                              : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  FilledButton(
+                    onPressed: checkingPin
+                        ? null
+                        : () => unawaited(submitPin()),
+                    child: Text(checkingPin ? 'Checking…' : 'Unlock'),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      );
+      return await dialog ?? false;
+    } finally {
+      pinController.dispose();
+      pinFocusNode.dispose();
+    }
   }
 
   Future<void> _pushStateToWeb(Map<String, dynamic> state) async {
@@ -442,7 +556,6 @@ class _FinanceOsShellState extends State<FinanceOsShell>
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    body: SafeArea(child: _webView),
-  );
+  Widget build(BuildContext context) =>
+      Scaffold(body: SafeArea(child: _webView));
 }

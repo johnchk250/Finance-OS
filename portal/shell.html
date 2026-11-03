@@ -78,18 +78,18 @@
       <div id="appModalActions" class="app-modal-actions"></div>
     </form>
   </dialog>
-  <div id="pinLockOverlay" class="pin-lock-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="pinLockTitle">
+  <dialog id="pinLockOverlay" class="pin-lock-overlay" aria-labelledby="pinLockTitle">
     <div class="pin-lock-card">
       <div class="brand-mark" aria-hidden="true" style="margin:0 auto 12px;background:var(--green);color:#fff;">৳</div>
       <h2 id="pinLockTitle">Workspace Locked</h2>
       <p id="pinLockSub" class="muted">Enter your PIN to unlock Finance OS</p>
       <form id="pinUnlockForm" class="pin-lock-form" autocomplete="off">
-        <input id="pinUnlockInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" aria-label="PIN" autocomplete="off">
+        <input id="pinUnlockInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" aria-label="PIN" autocomplete="off" autofocus>
         <div id="pinUnlockError" class="pin-lock-error" hidden>Incorrect PIN. Please try again.</div>
         <button type="submit" class="primary" style="width:100%;">Unlock</button>
       </form>
     </div>
-  </div>
+  </dialog>
   <div id="drawer" class="drawer" aria-hidden="true">
     <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
       <div class="drawer-head"><h2 id="drawerTitle">Add record</h2><button id="closeDrawer" class="icon" title="Close" aria-label="Close form">×</button></div>

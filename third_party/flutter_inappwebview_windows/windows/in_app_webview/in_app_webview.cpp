@@ -1665,7 +1665,6 @@ namespace flutter_inappwebview_plugin
     }
   }
 
-
   void InAppWebView::setCursorPos(double x, double y)
   {
     if (!webViewCompositionController) {

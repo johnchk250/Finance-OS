@@ -1829,7 +1829,7 @@
       clone.querySelector('#taxYearMenu')?.classList.remove('open');
       clone.querySelector('#periodBadge')?.setAttribute('aria-expanded', 'false');
       clone.querySelector('#nativeSyncWrap')?.setAttribute('hidden', '');
-      clone.querySelector('#pinLockOverlay')?.setAttribute('hidden', '');
+      clone.querySelector('#pinLockOverlay')?.removeAttribute('open');
       clone.querySelectorAll('.native-only-item').forEach(node => node.setAttribute('hidden', ''));
       clone.querySelectorAll('.browser-only-item').forEach(node => node.removeAttribute('hidden'));
       clone.querySelectorAll('.undo-toast').forEach(node => node.remove());

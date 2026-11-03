@@ -221,7 +221,7 @@
             <div class="set-row-2" style="margin-top:16px;">
               <div class="set-subcard">
                 <div class="set-sublabel">App Lock (PIN Protection)</div>
-                <p class="muted" style="font-size:12px;margin-bottom:10px;">${hasPin ? "PIN lock is active. Finance OS requires your PIN on startup and when returning to the app." : "Protect your salary, assets, and tax records with a local PIN on startup and app resume."}</p>
+                <p class="muted" style="font-size:12px;margin-bottom:10px;">${hasPin ? "PIN lock is active. Finance OS requires your PIN when the app opens." : "Protect your salary, assets, and tax records with a local PIN when the app opens."}</p>
                 <div class="actions" style="gap:8px;flex-wrap:wrap;">
                   <button type="button" id="configurePinBtn" class="primary">${hasPin ? "Change PIN" : "Enable PIN Lock"}</button>
                   ${hasPin ? `<button type="button" id="lockWorkspaceBtn" class="secondary">Lock Now</button><button type="button" id="removePinBtn" class="danger">Disable PIN</button>` : ""}

@@ -105,22 +105,52 @@
       if (lockBtn) lockBtn.hidden = !getWorkspacePin();
     }
 
+    function focusPinUnlockInput() {
+      const overlay = q("pinLockOverlay");
+      const input = q("pinUnlockInput");
+      if (overlay?.open && input) {
+        input.focus({ preventScroll: true });
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+    }
+
+    function isWorkspaceLocked() {
+      return Boolean(getWorkspacePin()) && q("pinLockOverlay")?.open === true;
+    }
+
+    function ensureWorkspacePinLock() {
+      if (getWorkspacePin() && q("pinLockOverlay")?.open !== true) {
+        lockWorkspaceNow();
+      }
+    }
+
+    function unlockWorkspaceWithPin(enteredPin) {
+      if (!getWorkspacePin() || enteredPin !== getWorkspacePin()) return false;
+      q("pinLockOverlay")?.close();
+      document.querySelector(".app")?.removeAttribute("inert");
+      q("mobileNav")?.removeAttribute("inert");
+      if (q("pinUnlockInput")) q("pinUnlockInput").value = "";
+      if (q("pinUnlockError")) q("pinUnlockError").hidden = true;
+      return true;
+    }
+    window.financeOSUnlockWithPin = unlockWorkspaceWithPin;
+
     function lockWorkspaceNow() {
       const pin = getWorkspacePin();
       if (!pin) return;
       const overlay = q("pinLockOverlay");
       if (!overlay) return;
-      overlay.hidden = false;
+      if (!overlay.open) overlay.showModal();
       document.querySelector(".app")?.setAttribute("inert", "");
       q("mobileNav")?.setAttribute("inert", "");
       const inp = q("pinUnlockInput");
       const err = q("pinUnlockError");
       if (err) err.hidden = true;
-      if (inp) { inp.value = ""; setTimeout(() => inp.focus(), 50); }
-    }
-
-    function checkPinLockOnResume() {
-      if (getWorkspacePin()) lockWorkspaceNow();
+      if (inp) {
+        inp.value = "";
+        requestAnimationFrame(() => requestAnimationFrame(focusPinUnlockInput));
+      }
+      window.financeNativeBridge?.requestPinUnlock?.();
     }
 
     async function promptConfigurePin() {
@@ -166,17 +196,11 @@
     }
 
     if (q("pinUnlockForm")) {
+      q("pinLockOverlay")?.addEventListener("cancel", (e) => e.preventDefault());
       q("pinUnlockForm").onsubmit = (e) => {
         e.preventDefault();
-        const pin = getWorkspacePin();
         const entered = (q("pinUnlockInput")?.value || "").trim();
-        if (entered === pin) {
-          q("pinLockOverlay").hidden = true;
-          document.querySelector(".app")?.removeAttribute("inert");
-          q("mobileNav")?.removeAttribute("inert");
-          q("pinUnlockInput").value = "";
-          if (q("pinUnlockError")) q("pinUnlockError").hidden = true;
-        } else {
+        if (!unlockWorkspaceWithPin(entered)) {
           if (q("pinUnlockError")) q("pinUnlockError").hidden = false;
           q("pinUnlockInput")?.select?.();
         }

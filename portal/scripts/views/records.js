@@ -141,6 +141,15 @@
         .reduce((sum, row) => sum + num(row.pfEmployee) + num(row.pfEmployer), 0);
     }
 
+    function periodPfInterestAdditions(period = taxPeriod()) {
+      return (state?.investments || []).reduce((sum, inv) => {
+        if (inv.type !== "provident_fund" || !Array.isArray(inv.pfLedger)) return sum;
+        return sum + inv.pfLedger
+          .filter(entry => withinPeriod(entry.date, period))
+          .reduce((s, entry) => s + Math.max(0, num(entry.currentValue || entry.principal) - num(entry.principal)), 0);
+      }, 0);
+    }
+
     function assetFlowAudit() {
       const period = taxPeriod();
       const periodEnd = period.end;
@@ -178,6 +187,7 @@
         .filter(t => t.type === "expense" && t.generatedKind !== "investmentFunding" && t.generatedKind !== "assetTransfer" && t.category !== "Investment contribution")
         .reduce((sum, t) => sum + num(t.amount), 0);
       const payrollPf = periodPayrollPfAdditions(period);
+      const pfInterest = periodPfInterestAdditions(period);
       const tdsWithheld = (state?.salary || [])
         .filter(row => withinPeriod(row.date, period))
         .reduce((sum, row) => sum + num(row.tds), 0);
@@ -214,7 +224,7 @@
         .reduce((sum, inv) => sum + num(inv.currentValue || inv.principal), 0);
       const currentManualAssets = (state?.assets || []).reduce((sum, asset) => sum + valueOfAsset(asset, periodEnd), 0);
       const currentTotal = currentAccounts + currentInvestments + currentManualAssets;
-      const bridgeExpected = openingBaseline + cashIncome + payrollPf - consumptionOut + settlementGains - samePeriodClosedFunding;
+      const bridgeExpected = openingBaseline + cashIncome + payrollPf + pfInterest - consumptionOut + settlementGains - samePeriodClosedFunding;
       const variance = currentTotal - bridgeExpected;
 
       const generatedFunding = cashPeriodTxs.filter(t => t.generatedKind === "investmentFunding");
@@ -240,6 +250,7 @@
         consumptionOut,
         investmentFundingOut,
         payrollPf,
+        pfInterest,
         tdsWithheld,
         settlementTransfers,
         settlementGains,
@@ -278,6 +289,7 @@
               ${row("Cash income (in)", a.cashIncome, "Net of TDS & employee PF withheld at source")}
               ${a.tdsWithheld ? row("TDS withheld at source", -a.tdsWithheld, "Memo only — already excluded from cash income") : ""}
               ${row("Payroll PF additions", a.payrollPf, "Employee + employer PF (non-cash)")}
+              ${a.pfInterest ? row("PF interest earned", a.pfInterest, "Non-cash interest credited to PF balance") : ""}
               ${row("Consumption out (out)", -a.consumptionOut, "Excludes investment contributions")}
               ${a.settlementGains ? row("Settlement gains", a.settlementGains, "Principal + profit after source tax, minus opening value, closed this period") : ""}
               ${a.samePeriodClosedFunding ? row("Same-period closed funding (out)", -a.samePeriodClosedFunding, "Funded & closed within the period — neutralizes cash leg") : ""}
