@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
@@ -12,6 +13,7 @@ abstract class SyncFolder {
   Future<List<String>> listFiles();
   Future<String> readText(String relativePath);
   Future<void> writeText(String relativePath, String contents);
+  Stream<FileSystemEvent>? watch() => null;
 
   static Future<String?> pick() async {
     if (Platform.isAndroid) {
@@ -32,13 +34,26 @@ class LocalSyncFolder extends SyncFolder {
   const LocalSyncFolder(super.root);
 
   @override
+  Stream<FileSystemEvent>? watch() {
+    final directory = Directory(root);
+    if (!directory.existsSync()) return null;
+    try {
+      return directory.watch(recursive: true);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
   Future<List<String>> listFiles() async {
     final directory = Directory(root);
     if (!directory.existsSync()) return const [];
     final files = <String>[];
     await for (final entity in directory.list(recursive: true)) {
       if (entity is! File) continue;
-      files.add(p.relative(entity.path, from: root).replaceAll('\\', '/'));
+      final rel = p.relative(entity.path, from: root).replaceAll('\\', '/');
+      if (rel.endsWith('.tmp')) continue;
+      files.add(rel);
     }
     return files;
   }
@@ -68,7 +83,10 @@ class AndroidSafSyncFolder extends SyncFolder {
     final result = await _channel.invokeMethod<List<dynamic>>('listFiles', {
       'treeUri': root,
     });
-    return (result ?? const []).map((entry) => entry.toString()).toList();
+    return (result ?? const [])
+        .map((entry) => entry.toString())
+        .where((path) => !path.endsWith('.tmp'))
+        .toList();
   }
 
   @override

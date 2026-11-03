@@ -910,3 +910,8 @@ tfoot.tr-total td.amount { color: var(--green); }
   color: var(--muted);
   line-height: 1.4;
 }
+
+[data-theme="dark"] .tchip.provident_fund { background: #1e2f44; color: #82a9c6; }
+[data-theme="dark"] .tchip.mutual_fund { background: #2c2038; color: #c59ff0; }
+[data-theme="dark"] .tchip.property, [data-theme="dark"] .tchip.other { background: #232d29; color: #a9bdb5; }
+[data-theme="dark"] .asset-hero { background: linear-gradient(135deg, var(--surface) 0%, var(--surface-soft) 100%); }

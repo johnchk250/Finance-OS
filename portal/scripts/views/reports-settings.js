@@ -1,17 +1,6 @@
-    function documentsView(search) {
-      const rows = filterRows(state.documents || [], search);
-      return
-        ${recordTabs("documents")}
-        <div class="panel"><div class="panel-head"><h2>Document vault</h2><button data-add="documents">Add Document</button></div><div class="panel-body split-list">
-        <div class="notice">For now this core stores document metadata, extracted fields, and links. Actual PDF/image parsing can be added as a server or browser-worker module next.</div>
-        ${rows.length ? rows.map(d => `<div class="row-card"><div><h3>${d.name}</h3><p>${d.type} | ${d.taxYear || "no tax year"} | ${d.fileName || "file path not set"}<br>${d.extracted || "No extracted fields yet."}</p><div class="chips">${d.linkedType ? chip("Linked to " + d.linkedType) : ""}${d.linkedId ? chip("Synced") : ""}</div></div><div class="actions">${rowMenu([ { copy: `documents:${d.id}`, label: "Copy" }, { edit: `documents:${d.id}`, label: "Edit" }, { sep: true }, { delete: `documents:${d.id}`, label: "Delete", danger: true } ])}</div></div>`).join("") : empty("documents")}
-        </div></div>`;
-    }
-
     function reportsView() {
       const d = derive();
 
-      // KPI Calculations
       const savingsRate = d.savingsRate;
       const savingsOffset = 138.2 - (138.2 * Math.min(100, Math.max(0, savingsRate))) / 100;
 
@@ -33,9 +22,6 @@
       const _repPeriod = taxPeriod();
       const _repEnd = _repPeriod.end;
       const liquidAccounts = (state?.accounts || []).reduce((s, a) => s + accountCurrentBalance(a.id, _repEnd), 0);
-      // ── FIX 19: include liquid investments (Sanchayapatra with 85% haircut for early encashment) ──
-      // Period-aware: only instruments that had STARTED by periodEnd and were NOT
-      // yet withdrawn/matured by periodEnd count toward this period's liquidity.
       const liquidInvestments = (state?.investments || [])
         .filter(inv => !inv.startDate || inv.startDate <= _repEnd)
         .filter(inv => {
@@ -50,7 +36,6 @@
         }, 0);
       const liquidAssets = liquidAccounts + liquidInvestments;
       const txs = state?.transactions || [];
-      // Expense runway uses only the selected period's expenses for avg calculation
       const expTxs = txs.filter(t => t.type === 'expense' && withinPeriod(t.date, _repPeriod));
       const monthsWithExpense = new Set(expTxs.map(t => (t.date || "").slice(0, 7)));
       const totalExp = expTxs.reduce((s, t) => s + num(t.amount), 0);
@@ -65,9 +50,9 @@
       const taxRecords = (state?.taxPayments || []).length;
       const planningRecords = (state?.goals || []).length;
 
-      return
+      return `
+        ${recordTabs("reports")}
         <div class="kpis-wrap">
-          <!-- KPI Card 1: Savings Rate -->
           <div class="kpi-card">
             <div class="kpi-info">
               <span>Savings Rate</span>
@@ -79,11 +64,9 @@
                 <circle class="progress-ring__background" stroke="var(--bg)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" />
                 <circle class="progress-ring__circle" stroke="var(--green)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" stroke-dasharray="138.2" stroke-dashoffset="${savingsOffset}" stroke-linecap="round" />
               </svg>
-              <div class="kpi-icon-overlay"></div>
             </div>
           </div>
 
-          <!-- KPI Card 2: Debt-to-Asset -->
           <div class="kpi-card">
             <div class="kpi-info">
               <span>Debt-to-Asset</span>
@@ -95,11 +78,9 @@
                 <circle class="progress-ring__background" stroke="var(--bg)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" />
                 <circle class="progress-ring__circle" stroke="${debtColor}" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" stroke-dasharray="138.2" stroke-dashoffset="${debtOffset}" stroke-linecap="round" />
               </svg>
-              <div class="kpi-icon-overlay"></div>
             </div>
           </div>
 
-          <!-- KPI Card 3: Tax Rebate Progress -->
           <div class="kpi-card">
             <div class="kpi-info">
               <span>Tax Rebate</span>
@@ -111,11 +92,9 @@
                 <circle class="progress-ring__background" stroke="var(--bg)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" />
                 <circle class="progress-ring__circle" stroke="var(--blue)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" stroke-dasharray="138.2" stroke-dashoffset="${rebateOffset}" stroke-linecap="round" />
               </svg>
-              <div class="kpi-icon-overlay"></div>
             </div>
           </div>
 
-          <!-- KPI Card 4: Emergency Runway -->
           <div class="kpi-card">
             <div class="kpi-info">
               <span>Runway</span>
@@ -127,7 +106,6 @@
                 <circle class="progress-ring__background" stroke="var(--bg)" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" />
                 <circle class="progress-ring__circle" stroke="${runwayColor}" stroke-width="4" fill="transparent" r="22" cx="26" cy="26" stroke-dasharray="138.2" stroke-dashoffset="${runwayOffset}" stroke-linecap="round" />
               </svg>
-              <div class="kpi-icon-overlay"></div>
             </div>
           </div>
         </div>
@@ -142,7 +120,6 @@
           <div class="panel-head"><h2>Snapshot ledger</h2></div>
           <div class="panel-body">
             <div class="ledger-list">
-              <!-- Assets Card -->
               <div class="ledger-card">
                 <div class="ledger-header">
                   <div class="ledger-title-wrap">
@@ -157,7 +134,6 @@
                 </div>
               </div>
 
-              <!-- Liabilities Card -->
               <div class="ledger-card">
                 <div class="ledger-header">
                   <div class="ledger-title-wrap">
@@ -172,7 +148,6 @@
                 </div>
               </div>
 
-              <!-- Tax Card -->
               <div class="ledger-card">
                 <div class="ledger-header">
                   <div class="ledger-title-wrap">
@@ -187,7 +162,6 @@
                 </div>
               </div>
 
-              <!-- Planning Card -->
               <div class="ledger-card">
                 <div class="ledger-header">
                   <div class="ledger-title-wrap">
@@ -207,7 +181,7 @@
     }
 
     function templateRowHtml(field, label, comp = { type: "percentage", value: 0 }) {
-      return
+      return `
         <div style="display:flex; align-items:center; gap:8px; justify-content:space-between;">
           <span style="font-size:13px; font-weight:500; flex:1;">${label}</span>
           <select id="salTemplate_${field}_type" style="width:110px;">
@@ -219,10 +193,12 @@
       `;
     }
 
-    function settingsGeneralGroup(cats, accs, slabs, taxRules) {
-      return
+    function settingsGeneralGroup() {
+      const hasPin = Boolean(typeof getWorkspacePin === "function" && getWorkspacePin());
+      const isPriv = isPrivacyMode();
+      return `
         <div class="set-group">
-          <div class="set-head"><div class="set-ic">⚙</div><div><div class="set-title">General</div><div class="set-sub">Profile, modules, tax year &amp; cascade behavior</div></div></div>
+          <div class="set-head"><div class="set-ic">⚙</div><div><div class="set-title">General &amp; Privacy</div><div class="set-sub">Profile, PIN lock, privacy blur, modules &amp; tax year</div></div></div>
           <div class="set-body">
             <div class="grid" style="grid-template-columns:1fr 1fr; gap:14px;">
               <label>Owner / profile name <input id="ownerSetting" value="${escapeHtml(state?.settings?.owner || "")}"></label>
@@ -241,7 +217,24 @@
               <label>Income year start <small style="color:var(--muted);font-size:11px;"> — auto from tax year</small><input id="incomeStartSetting" type="date" value="${(state?.settings?.incomeYearStart || '')}" disabled title="Auto-calculated from Tax Year selection"></label>
               <label>Income year end <small style="color:var(--muted);font-size:11px;"> — auto from tax year</small><input id="incomeEndSetting" type="date" value="${(state?.settings?.incomeYearEnd || '')}" disabled title="Auto-calculated from Tax Year selection"></label>
             </div>
-            <div class="set-sublabel" style="margin-top:18px;">Modules</div>
+
+            <div class="set-row-2" style="margin-top:16px;">
+              <div class="set-subcard">
+                <div class="set-sublabel">App Lock (PIN Protection)</div>
+                <p class="muted" style="font-size:12px;margin-bottom:10px;">${hasPin ? "PIN lock is active. Finance OS requires your PIN on startup and when returning to the app." : "Protect your salary, assets, and tax records with a local PIN on startup and app resume."}</p>
+                <div class="actions" style="gap:8px;flex-wrap:wrap;">
+                  <button type="button" id="configurePinBtn" class="primary">${hasPin ? "Change PIN" : "Enable PIN Lock"}</button>
+                  ${hasPin ? `<button type="button" id="lockWorkspaceBtn" class="secondary">Lock Now</button><button type="button" id="removePinBtn" class="danger">Disable PIN</button>` : ""}
+                </div>
+              </div>
+              <div class="set-subcard">
+                <div class="set-sublabel">Privacy Blur Mode</div>
+                <p class="muted" style="font-size:12px;margin-bottom:10px;">Mask all BDT currency amounts with <code>৳ ••••••</code> when sharing your screen. Shortcut: <kbd>Ctrl+B</kbd>.</p>
+                <button type="button" id="settingsPrivacyBtn" class="secondary">${isPriv ? "Disable Privacy Blur" : "Enable Privacy Blur"}</button>
+              </div>
+            </div>
+
+            <div class="set-sublabel" style="margin-top:18px;">Visible Modules</div>
             <div class="module-grid">
               ${modules.map(([id, label, desc]) => `<label class="toggle-card"><input type="checkbox" data-module="${id}" ${state?.settings?.activeModules?.[id] ? "checked" : ""} ${id === "home" || id === "settings" ? "disabled" : ""}><span><strong>${label}</strong><span>${desc}</span></span></label>`).join("")}
             </div>
@@ -250,11 +243,23 @@
     }
 
     function settingsBackupGroup() {
-      return
+      const isNative = typeof window !== "undefined" && Boolean(window.flutter_inappwebview);
+      return `
         <div class="set-group">
-          <div class="set-head"><div class="set-ic">💾</div><div><div class="set-title">Backup &amp; Data</div><div class="set-sub">Export, import, portable archive, sample data &amp; reset</div></div></div>
+          <div class="set-head"><div class="set-ic">💾</div><div><div class="set-title">Sync, Safety Vault &amp; Backups</div><div class="set-sub">Conduit folder sync, local safety restore points, and portable exports</div></div></div>
           <div class="set-body">
-            <div class="notice">Roll forward a new tax year, back up your data, or save a fully self-contained portable HTML file that embeds your latest state.</div>
+            ${isNative ? `
+              <div class="set-subcard" style="margin-bottom:14px;">
+                <div class="set-sublabel">Conduit Sync &amp; Local Safety Vault</div>
+                <p class="muted" style="font-size:12px;margin-bottom:10px;">Synchronize immutable operations across PC and phone via Conduit, or inspect/restore local safety backups with visual record diffs.</p>
+                <div class="set-actions">
+                  <button type="button" id="settingsSyncNowBtn" class="primary">Sync Now</button>
+                  <button type="button" id="settingsChooseFolderBtn">Choose Conduit Folder</button>
+                  <button type="button" id="settingsSafetyVaultBtn">Open Safety &amp; Restore Vault</button>
+                </div>
+              </div>
+            ` : ""}
+            <div class="notice">Roll forward a new tax year, back up your data, or save a self-contained portable HTML file that embeds your latest state.</div>
             <div class="set-actions" style="margin-top:12px;">
               <button id="newTaxYearBtn" class="primary">New Tax Year</button>
               <button id="portableBtn" class="primary" style="background:#285f91; border-color:#285f91">Save Portable HTML</button>
@@ -275,7 +280,7 @@
     }
 
     function settingsListsGroup(cats, accs) {
-      return
+      return `
         <div class="set-group">
           <div class="set-head"><div class="set-ic">📋</div><div><div class="set-title">Reference Lists</div><div class="set-sub">Categories &amp; accounts used across every module</div></div></div>
           <div class="set-body">
@@ -309,7 +314,7 @@
     }
 
     function settingsTaxGroup(slabs, stdDed, rpx, template) {
-      return
+      return `
         <div class="set-group">
           <div class="set-head"><div class="set-ic">📐</div><div><div class="set-title">Tax &amp; Salary Rules</div><div class="set-sub">Year-specific legislation — saved for the selected tax year only</div></div></div>
           <div class="set-body">
@@ -352,7 +357,7 @@
                 <div>
                   <h3 style="font-size:13px; font-weight:600; margin-bottom:10px; border-bottom:1px solid var(--border); padding-bottom:4px;">Other Allowances (aggregates into 'Other')</h3>
                   <div id="salTemplate_otherList" style="max-height: 220px; overflow-y: auto; display:flex; flex-direction:column; gap:8px; padding-right:5px;">
-                    ${(template.otherComponents || []).map((c, idx) =>
+                    ${(template.otherComponents || []).map((c, idx) => `
                       <div class="slab-row" data-other-idx="${idx}">
                         <input type="text" class="other-name" value="${escapeHtml(c.name)}" placeholder="Name" style="flex:2;">
                         <select class="other-type" style="width:110px;">
@@ -381,10 +386,6 @@
         </div>`;
     }
 
-    function settingsHealthGroup() {
-      return `<div class="set-group">${continuityHealthPanelInner()}</div>`;
-    }
-
     function settingsView() {
       const cats = state?.categories || [];
       const accs = state?.accounts || [];
@@ -393,12 +394,11 @@
       const stdDed = taxRules.standardDeduction || { fraction: 0.3333, cap: 500000 };
       const rpx = taxRules.rebateParams || { rate: 0.15, investmentCapPercent: 0.20, maxCapAbsolute: 10000000 };
       const template = state?.settings?.salaryTemplate || { hra: {}, conveyance: {}, medical: {}, pfEmployee: {}, pfEmployer: {}, otherComponents: [] };
-      return
+      return `
         <div class="set-stack">
-          ${settingsGeneralGroup(cats, accs, slabs, taxRules)}
+          ${settingsGeneralGroup()}
           ${settingsBackupGroup()}
           ${settingsListsGroup(cats, accs)}
           ${settingsTaxGroup(slabs, stdDed, rpx, template)}
-          ${settingsHealthGroup()}
         </div>`;
     }

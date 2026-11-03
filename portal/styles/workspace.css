@@ -1313,3 +1313,668 @@ body.workspace-shell {
     box-shadow: none;
   }
 }
+
+/* ── UNIFIED NATIVE SYNC PILL, HUB SUB-NAV, MODALS, TAX SIMULATOR & PIN LOCK ── */
+
+.native-sync-panel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 11px;
+}
+
+.native-sync-panel[hidden] {
+  display: none !important;
+}
+
+.sync-pill {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--workspace-sidebar-text);
+  font-size: 11.5px;
+  font-weight: 620;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-pill:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+
+.sync-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #93a59e;
+  flex-shrink: 0;
+}
+
+.sync-pill[data-phase="idle"] .sync-dot {
+  background: #52b788;
+  box-shadow: 0 0 0 3px rgba(82, 183, 136, 0.22);
+}
+
+.sync-pill[data-phase="syncing"] .sync-dot {
+  background: #61c69c;
+  animation: pulse-save 1.1s infinite;
+}
+
+.sync-pill[data-phase="blocked"],
+.sync-pill[data-phase="error"] {
+  border-color: rgba(238, 130, 117, 0.45);
+  background: rgba(183, 71, 58, 0.22);
+}
+
+.sync-pill[data-phase="blocked"] .sync-dot,
+.sync-pill[data-phase="error"] .sync-dot {
+  background: #ee8275;
+}
+
+.safety-btn {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: var(--workspace-sidebar-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.safety-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.sidebar-footer kbd,
+#view kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-soft);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 10.5px;
+  line-height: 1.3;
+}
+
+.sidebar-footer kbd {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--workspace-sidebar-text);
+}
+
+#privacyToggleBtn.active {
+  background: var(--green-pale);
+  color: var(--green);
+  border-color: rgba(23, 107, 82, 0.25);
+}
+
+/* Hub Sub-Navigation Bar (Cohesive Segmented Control) */
+.hub-subnav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  padding: 4px;
+  border-radius: 11px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 2px 8px rgba(25, 54, 43, 0.035);
+}
+
+.hub-subnav .hub-tab {
+  min-height: 32px;
+  padding: 5px 14px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.hub-subnav .hub-tab:hover {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.hub-subnav .hub-tab.active {
+  background: var(--green);
+  color: var(--workspace-on-green);
+  font-weight: 660;
+  box-shadow: 0 1px 3px rgba(18, 77, 59, 0.18);
+}
+
+/* Integrated Table Filter & Sort Bar */
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  padding: 11px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+.filter-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.filter-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-count strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.filter-bar-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.filter-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 3px 2px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color 0.15s ease;
+}
+
+.filter-field:focus-within {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px var(--workspace-focus);
+}
+
+.filter-field .filter-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.045em;
+  color: var(--muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.filter-field select {
+  width: auto !important;
+  min-width: 112px;
+  min-height: 30px !important;
+  height: 30px;
+  padding: 3px 26px 3px 6px !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background-color: transparent !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+  color: var(--text);
+  box-shadow: none !important;
+  cursor: pointer;
+}
+
+.filter-field select:focus {
+  outline: none;
+  box-shadow: none !important;
+}
+
+/* Data Table Column Typography, Alignment & Badges */
+.workspace-shell table.data-table th,
+.workspace-shell table.data-table td {
+  padding: 11px 14px;
+  vertical-align: middle;
+}
+
+.workspace-shell table.data-table th.col-num,
+.workspace-shell table.data-table td.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.workspace-shell table.data-table th.col-date,
+.workspace-shell table.data-table td.col-date {
+  width: 112px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-shell table.data-table td.col-main strong {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  letter-spacing: -0.008em;
+}
+
+.workspace-shell table.data-table .row-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.workspace-shell table.data-table th.col-type,
+.workspace-shell table.data-table td.col-type {
+  width: 110px;
+  white-space: nowrap;
+}
+
+.workspace-shell table.data-table th.col-link,
+.workspace-shell table.data-table td.col-link {
+  width: 105px;
+  white-space: nowrap;
+}
+
+.workspace-shell table.data-table th.col-act,
+.workspace-shell table.data-table td.col-act {
+  width: 52px;
+  text-align: right;
+  padding-right: 10px;
+}
+
+.tx-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+.tx-badge.income {
+  background: var(--green-pale);
+  color: var(--green);
+}
+
+.tx-badge.expense {
+  background: var(--red-pale);
+  color: var(--red);
+}
+
+.tx-badge.transfer {
+  background: var(--blue-pale);
+  color: var(--blue);
+}
+
+.link-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 560;
+  text-transform: capitalize;
+}
+
+/* Refined Investment Ledger Rows */
+.workspace-shell .inv-rows {
+  padding: 0;
+}
+
+.workspace-shell .inv-rows .inv-row {
+  padding: 14px 18px;
+  gap: 16px;
+  align-items: center;
+  transition: background-color 0.14s ease;
+}
+
+.workspace-shell .inv-rows .inv-row:hover {
+  background: color-mix(in srgb, var(--green-pale) 28%, var(--surface));
+}
+
+.workspace-shell .inv-rows .inv-row.open {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--surface-soft) 65%, var(--surface));
+}
+
+.workspace-shell .inv-main h3 {
+  font-size: 14px;
+  font-weight: 660;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0 0 5px;
+}
+
+.workspace-shell .inv-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.workspace-shell .inv-inst {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-shell .inv-mat-pill {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-shell .inv-side {
+  width: 175px;
+  gap: 2px;
+}
+
+.workspace-shell .inv-value {
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-shell .inv-gain {
+  font-size: 11.5px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-shell .inv-yield-sub {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 520;
+  font-variant-numeric: tabular-nums;
+}
+
+.workspace-shell .inv-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.workspace-shell .inv-chevron {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  transition: transform 0.16s ease, background-color 0.14s ease;
+}
+
+.workspace-shell .inv-row:hover .inv-chevron {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.workspace-shell .inv-row.open .inv-chevron {
+  transform: rotate(90deg);
+  color: var(--green);
+}
+
+.workspace-shell .inv-detail-box {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 13px 15px;
+}
+
+@media (max-width: 768px) {
+  .hub-subnav {
+    display: flex;
+    width: 100%;
+  }
+  .hub-subnav .hub-tab {
+    flex: 1 1 auto;
+    text-align: center;
+    padding-inline: 10px;
+  }
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 10px 12px;
+  }
+  .filter-bar-controls {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .filter-field {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .filter-field select {
+    min-width: 0;
+    flex: 1;
+  }
+  .workspace-shell .inv-rows .inv-row {
+    padding: 12px 14px;
+  }
+  .workspace-shell .inv-side {
+    width: 100%;
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+}
+
+/* Interactive Tax-Saving What-If Simulator */
+.tax-whatif-box {
+  margin-top: 14px;
+  padding: 15px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--green-pale) 45%, var(--surface));
+}
+
+.tax-whatif-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tax-whatif-slider-row {
+  margin: 8px 0 12px;
+}
+
+.tax-whatif-slider-row input[type="range"] {
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tax-whatif-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.whatif-metric {
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.whatif-metric span {
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.whatif-metric strong {
+  font-size: 16px;
+  font-weight: 720;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.whatif-metric small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .tax-whatif-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Custom Non-Blocking Modal Dialog */
+.app-modal {
+  width: min(460px, calc(100vw - 28px));
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--workspace-elevated-shadow);
+}
+
+.app-modal::backdrop {
+  background: rgba(8, 18, 14, 0.48);
+}
+
+.app-modal-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 15px 18px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.app-modal-head h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.app-modal-body {
+  padding: 16px 18px;
+}
+
+.app-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-soft);
+}
+
+button.danger-solid {
+  background: var(--red);
+  border-color: var(--red);
+  color: #ffffff;
+}
+
+button.danger-solid:hover {
+  opacity: 0.9;
+}
+
+/* PIN App Lock Overlay */
+.pin-lock-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  background: color-mix(in srgb, var(--bg) 92%, #08120e);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.pin-lock-overlay[hidden] {
+  display: none !important;
+}
+
+.pin-lock-card {
+  width: min(360px, 100%);
+  padding: 28px 24px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--workspace-elevated-shadow);
+  text-align: center;
+}
+
+.pin-lock-card h2 {
+  font-size: 19px;
+  font-weight: 720;
+  margin-bottom: 4px;
+}
+
+.pin-lock-form {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pin-lock-form input {
+  text-align: center;
+  font-size: 22px;
+  letter-spacing: 0.35em;
+  font-weight: 700;
+  padding: 10px 14px;
+}
+
+.pin-lock-error {
+  color: var(--red);
+  font-size: 12px;
+  font-weight: 600;
+}

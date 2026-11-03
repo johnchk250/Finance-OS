@@ -83,6 +83,10 @@ class SafetyVault {
   final DateTime Function() _now;
   final String Function() _createId;
 
+  // Cache parsed restore points by file path + lastModified + length so we
+  // never re-read or re-hash 30-60 untouched backup files on every edit.
+  final Map<String, _CachedRestoreEntry> _fileCache = {};
+
   Future<SafetyRestorePoint?> createRestorePoint(
     Map<String, dynamic> state, {
     required String reason,
@@ -103,32 +107,58 @@ class SafetyVault {
       totalRecords: profile.totalRecords,
     );
     directory.createSync(recursive: true);
-    await _atomicWrite(
-      File(p.join(directory.path, point.fileName)),
-      const JsonEncoder.withIndent('  ').convert(point.toJson()),
-    );
+    final file = File(p.join(directory.path, point.fileName));
+    final encoded = const JsonEncoder.withIndent('  ').convert(point.toJson());
+    await _atomicWrite(file, encoded);
+    try {
+      final stat = file.statSync();
+      _fileCache[file.path] = _CachedRestoreEntry(
+        modified: stat.modified,
+        size: stat.size,
+        point: point,
+      );
+    } catch (_) {}
     await _prune();
     return point;
   }
 
   Future<List<SafetyRestorePoint>> listRestorePoints() async {
-    if (!directory.existsSync()) return const [];
+    if (!directory.existsSync()) {
+      _fileCache.clear();
+      return const [];
+    }
     final points = <SafetyRestorePoint>[];
+    final seenPaths = <String>{};
     await for (final entity in directory.list()) {
       if (entity is! File || !entity.path.endsWith('.json')) continue;
+      seenPaths.add(entity.path);
       try {
+        final stat = entity.statSync();
+        final cached = _fileCache[entity.path];
+        if (cached != null &&
+            cached.size == stat.size &&
+            cached.modified.isAtSameMomentAs(stat.modified)) {
+          points.add(cached.point);
+          continue;
+        }
         final raw = jsonDecode(await entity.readAsString());
         if (raw is! Map) continue;
-        points.add(
-          SafetyRestorePoint.fromJson(
-            raw.map((key, value) => MapEntry(key.toString(), value)),
-          ),
+        final point = SafetyRestorePoint.fromJson(
+          raw.map((key, value) => MapEntry(key.toString(), value)),
         );
+        _fileCache[entity.path] = _CachedRestoreEntry(
+          modified: stat.modified,
+          size: stat.size,
+          point: point,
+        );
+        points.add(point);
       } catch (_) {
+        _fileCache.remove(entity.path);
         // Never delete an unreadable restore point automatically. A partially
         // damaged vault may still be recoverable with external tools.
       }
     }
+    _fileCache.removeWhere((path, _) => !seenPaths.contains(path));
     points.sort((left, right) => right.createdAt.compareTo(left.createdAt));
     return points;
   }
@@ -166,6 +196,7 @@ class SafetyVault {
     for (final point in points) {
       if (keep.contains(point.backupId)) continue;
       final target = File(p.join(directory.path, point.fileName));
+      _fileCache.remove(target.path);
       if (target.existsSync()) await target.delete();
     }
   }
@@ -177,4 +208,16 @@ class SafetyVault {
     if (target.existsSync()) await target.delete();
     await temporary.rename(target.path);
   }
+}
+
+class _CachedRestoreEntry {
+  const _CachedRestoreEntry({
+    required this.modified,
+    required this.size,
+    required this.point,
+  });
+
+  final DateTime modified;
+  final int size;
+  final SafetyRestorePoint point;
 }

@@ -1,12 +1,11 @@
     function automationPanel() {
       const rules = state.recurringRules || [];
-      const accounts = state.accounts || [];
-      const accName = id => accounts.find(a => a.id === id)?.name || "—";
+      const linkedLiabFor = id => id ? (state.liabilities || []).find(l => l.id === id) : null;
       const freqLabel = r => `${r.frequency === "weekly" ? "Weekly" : r.frequency === "yearly" ? "Yearly" : "Monthly"}${num(r.interval) > 1 ? " ×" + r.interval : ""}`;
       const rows = rules.map(r => {
         const missing = r._flagMissingAccount;
-        const linkedLiab = r.linkedLiabilityId ? (state.liabilities || []).find(l => l.id === r.linkedLiabilityId) : null;
-        return
+        const linkedLiab = linkedLiabFor(r.linkedLiabilityId);
+        return `
           <div class="row-card" style="flex-direction:column;gap:6px;${missing ? "border-color:var(--red);" : ""}">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;width:100%;">
               <div>
@@ -28,11 +27,8 @@
             </div>
           </div>`;
       }).join("");
-      return
-        <div class="seg" id="txViewSeg" style="margin-bottom:12px;">
-          <button type="button" class="seg-btn ${(state.settings.transactionViewTab || "transactions") === "transactions" ? "active" : ""}" data-txview="transactions">Transactions</button>
-          <button type="button" class="seg-btn ${state.settings.transactionViewTab === "automation" ? "active" : ""}" data-txview="automation">Automation</button>
-        </div>
+      return `
+        ${recordTabs("transactions")}
         <div class="panel">
           <div class="panel-head"><h2>Recurring rules</h2><button data-add="recurringRules">Add rule</button></div>
           <div class="panel-body">
@@ -42,10 +38,8 @@
         </div>`;
     }
 
-    // ── PHASE 3: Budgets view ──
     function budgetsView() {
       const budgets = (state.budgets || []).filter(b => !b.archivedAt);
-      // Month stepper driven by settings.budgetMonth (YYYY-MM), default this month.
       const curMonth = state.settings.budgetMonth || today.slice(0, 7);
       const [y, m] = curMonth.split("-").map(Number);
       const monthStart = `${curMonth}-01`;
@@ -65,7 +59,7 @@
         const projected = daysElapsed > 0 ? (spent / daysElapsed) * lastDay : spent;
         const color = pct >= 100 ? "var(--red)" : pct >= 80 ? "#d9904b" : "var(--green)";
         const remaining = Math.max(0, limit - spent);
-        return
+        return `
           <div class="panel">
             <div class="panel-head"><h2>${escapeHtml(catName(b.category))}</h2>
               <div class="actions">${rowMenu([
@@ -94,7 +88,8 @@
       const totalSpent = budgets.reduce((s, b) => s + compute.txTotals({ from: monthStart, to: monthEnd, type: "expense", category: b.category }).expense, 0);
       const overallPct = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0;
       const overallColor = overallPct >= 100 ? "var(--red)" : overallPct >= 80 ? "#d9904b" : "var(--green)";
-      return
+      return `
+        ${recordTabs("budgets")}
         <div class="panel">
           <div class="panel-head"><h2>Budgets — ${curMonth}</h2>
             <div class="actions">
@@ -124,7 +119,6 @@
       `;
     }
 
-    // ── PHASE 3: Home "Budget alerts" strip (≥80% used this month) ──
     function budgetAlertsStrip() {
       const budgets = (state.budgets || []).filter(b => !b.archivedAt);
       if (!budgets.length) return "";
@@ -143,29 +137,22 @@
       return `<div class="panel" style="margin-top:14px;border-left:3px solid var(--red);"><div class="panel-body" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;"><strong>Budget alerts</strong>${chips}</div></div>`;
     }
 
-    // ── PHASE 4: Forecast panel (tab inside Planning) ──
     function forecastPanel() {
       const fa = state.forecastAssumptions || {};
       const series = projectNetWorth();
-      const todayIdx = 0; // first point is today (truth)
-      const points = series.map(s => ({ date: s.date, value: s.netWorth }));
-      // Goal ETAs: first month projected net worth crosses each goal's target.
       const goals = state.goals || [];
       const etaRows = goals.map(g => {
         const target = num(g.target);
         if (!target) return null;
         const cross = series.find(s => s.netWorth >= target);
-        if (!cross) return `<div class="row-card"><h3>${escapeHtml(g.name)}</h3><p class="muted" style="font-size:12px;">Target ${money(target)} — not reached within ${fa.monthsAhead || 60} months at these assumptions.</p></div>`;
+        if (!cross) return `<div class="row-card"><div><h3>${escapeHtml(g.name)}</h3><p class="muted" style="font-size:12px;">Target ${money(target)} — not reached within ${fa.monthsAhead || 60} months at these assumptions.</p></div></div>`;
         const yrs = cross.month / 12;
-        return `<div class="row-card"><h3>${escapeHtml(g.name)}</h3><p class="muted" style="font-size:12px;">Target ${money(target)} — reached <strong>${cross.date}</strong> (${yrs.toFixed(1)} yrs)</p></div>`;
+        return `<div class="row-card"><div><h3>${escapeHtml(g.name)}</h3><p class="muted" style="font-size:12px;">Target ${money(target)} — reached <strong>${cross.date}</strong> (${yrs.toFixed(1)} yrs)</p></div></div>`;
       }).filter(Boolean).join("");
       const finalNW = series[series.length - 1].netWorth;
       const delta = finalNW - series[0].netWorth;
-      return
-        <div class="seg" id="planningSeg" style="margin-bottom:12px;">
-          <button type="button" class="seg-btn" data-planningtab="goals">Goals</button>
-          <button type="button" class="seg-btn active" data-planningtab="forecast">Forecast</button>
-        </div>
+      return `
+        ${recordTabs("planning")}
         <div class="grid kpis">
           ${kpi("Net worth today", series[0].netWorth, "From current ledger", true)}
           ${kpi(`Projected in ${fa.monthsAhead || 60}m`, finalNW, `${delta >= 0 ? "+" : ""}${money(delta)} vs today`, delta >= 0)}
@@ -199,33 +186,25 @@
       `;
     }
 
-    // Draw the forecast chart (solid history → dashed projection). Called by
-    // an extended drawCharts() via drawForecastChart().
     function drawForecastChart() {
       const el = q("forecastChart");
       if (!el) return;
       const fa = state.forecastAssumptions || {};
-      // Seed history from net-worth snapshots (truth), then append projection.
       const snaps = (state.netWorthSnapshots || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
       const histPoints = snaps.map(s => ({ date: s.date, value: s.netWorth }));
       const proj = projectNetWorth({ assumptions: fa });
       const projPoints = proj.map(p => ({ date: p.date, value: p.netWorth }));
-      // Join: history last point + projection (dashed from first projection idx).
       const todayPoint = { date: today, value: netWorthAsOf(today).netWorth };
       const allPoints = [...histPoints, todayPoint, ...projPoints];
-      const dashedFromIdx = histPoints.length + 1; // projection starts dashed
-      lineChart(el, allPoints, { color: "#1d4c74", fillArea: false, dashedFromIdx });
+      const dashedFromIdx = histPoints.length + 1;
+      lineChart(el, allPoints, { fillArea: false, dashedFromIdx });
     }
 
     function planningView(search) {
       const rows = filterRows(state.goals || [], search);
       const tab = state.settings.planningTab || "goals";
       if (tab === "forecast") return forecastPanel();
-      return
-        <div class="seg" id="planningSeg" style="margin-bottom:12px;">
-          <button type="button" class="seg-btn active" data-planningtab="goals">Goals</button>
-          <button type="button" class="seg-btn" data-planningtab="forecast">Forecast</button>
-        </div>
+      return `
         ${recordTabs("goals")}
         <div class="grid kpis">
           ${kpi("Active goals", rows.length, "Total open goals", rows.length > 0)}
@@ -243,12 +222,12 @@
               const pct = num(g.target) > 0 ? Math.min(100, Math.round((goalCurrent / num(g.target)) * 100)) : 0;
               const remaining = Math.max(0, num(g.target) - goalCurrent);
               const monthsLeft = num(g.monthlyContribution) > 0 ? Math.ceil(remaining / num(g.monthlyContribution)) : 0;
-              return
+              return `
                 <div class="row-card" style="flex-direction:column; gap:8px;">
                   <div style="display:flex; justify-content:space-between; align-items:flex-start; width:100%;">
                     <div>
-                      <h3>${g.name}</h3>
-                      <p>${g.type || "goal"} ${g.targetDate ? "&middot; Target: " + g.targetDate : ""}</p>
+                      <h3>${escapeHtml(g.name)}</h3>
+                      <p>${escapeHtml(g.type || "goal")} ${g.targetDate ? "&middot; Target: " + g.targetDate : ""}</p>
                     </div>
                     <div class="actions">
                       ${rowMenu([

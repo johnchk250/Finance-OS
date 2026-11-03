@@ -1,4 +1,293 @@
+    /* ── NON-BLOCKING MODAL & DIALOG SYSTEM ── */
+    let _activeModalResolve = null;
+
+    function closeAppModal(result = null) {
+      const dialog = q("appModal");
+      if (dialog && dialog.open) dialog.close();
+      if (_activeModalResolve) {
+        const res = _activeModalResolve;
+        _activeModalResolve = null;
+        res(result);
+      }
+    }
+
+    function showAppModal({ title = "Finance OS", bodyHtml = "", actions = [] }) {
+      const dialog = q("appModal");
+      if (!dialog || typeof dialog.showModal !== "function") {
+        return Promise.resolve(null);
+      }
+      if (_activeModalResolve) closeAppModal(null);
+
+      return new Promise(resolve => {
+        _activeModalResolve = resolve;
+        q("appModalTitle").textContent = title;
+        q("appModalBody").innerHTML = bodyHtml;
+        const actionsEl = q("appModalActions");
+        actionsEl.innerHTML = "";
+        actions.forEach(act => {
+          const btn = document.createElement("button");
+          btn.type = act.submit ? "submit" : "button";
+          btn.className = act.className || "";
+          btn.textContent = act.label;
+          btn.onclick = (e) => {
+            if (!act.submit) {
+              e.preventDefault();
+              const val = typeof act.getValue === "function" ? act.getValue() : act.value;
+              closeAppModal(val);
+            }
+          };
+          actionsEl.appendChild(btn);
+        });
+        const form = q("appModalForm");
+        form.onsubmit = (e) => {
+          e.preventDefault();
+          const submitAct = actions.find(a => a.submit) || actions[actions.length - 1];
+          const val = submitAct && typeof submitAct.getValue === "function" ? submitAct.getValue() : (submitAct ? submitAct.value : true);
+          closeAppModal(val);
+        };
+        const closeBtn = q("appModalClose");
+        if (closeBtn) closeBtn.onclick = () => closeAppModal(null);
+        dialog.oncancel = () => {
+          if (_activeModalResolve) {
+            const res = _activeModalResolve;
+            _activeModalResolve = null;
+            res(null);
+          }
+        };
+        dialog.showModal();
+        const firstInput = dialog.querySelector("input, select, button.primary");
+        if (firstInput) firstInput.focus();
+      });
+    }
+
+    function showAppNotice(title, message) {
+      return showAppModal({
+        title,
+        bodyHtml: `<p style="font-size:13.5px;line-height:1.5;white-space:pre-wrap;">${escapeHtml(message)}</p>`,
+        actions: [{ label: "OK", value: true, className: "primary", submit: true }]
+      });
+    }
+
+    function showAppConfirm(title, message, { confirmLabel = "Confirm", danger = false } = {}) {
+      return showAppModal({
+        title,
+        bodyHtml: `<p style="font-size:13.5px;line-height:1.5;white-space:pre-wrap;">${escapeHtml(message)}</p>`,
+        actions: [
+          { label: "Cancel", value: false },
+          { label: confirmLabel, value: true, className: danger ? "danger-solid" : "primary", submit: true }
+        ]
+      });
+    }
+
+    function showAppPrompt(title, message, defaultValue = "", inputType = "text") {
+      return showAppModal({
+        title,
+        bodyHtml: `
+          <p style="font-size:13px;color:var(--muted);margin-bottom:10px;white-space:pre-wrap;">${escapeHtml(message)}</p>
+          <input id="appModalPromptInput" type="${escapeHtml(inputType)}" value="${escapeHtml(String(defaultValue ?? ""))}" style="width:100%;">
+        `,
+        actions: [
+          { label: "Cancel", value: null },
+          {
+            label: "Save",
+            className: "primary",
+            submit: true,
+            getValue: () => q("appModalPromptInput")?.value ?? null
+          }
+        ]
+      });
+    }
+
+    function showRecurringCatchUpModal(items) {
+      if (!items || !items.length) return Promise.resolve("all");
+      const totalDue = items.reduce((s, i) => s + i.dueCount, 0);
+      const listHtml = items.map(i => `<li style="padding:3px 0;"><strong>${escapeHtml(i.rule.name)}</strong>: ${i.dueCount} missed instance(s) (${money(i.rule.amount)} each)</li>`).join("");
+      return showAppModal({
+        title: "Recurring payments catch-up",
+        bodyHtml: `
+          <p style="font-size:13px;line-height:1.5;margin-bottom:8px;"><strong>${totalDue}</strong> scheduled recurring transaction(s) fell due while Finance OS was closed:</p>
+          <ul style="margin:0 0 12px 18px;font-size:12.5px;color:var(--text);">${listHtml}</ul>
+          <p class="muted" style="font-size:12px;">How would you like to handle this gap?</p>
+        `,
+        actions: [
+          { label: "Skip gap", value: "skip" },
+          { label: "Generate latest 1 only", value: "once" },
+          { label: `Generate all (${totalDue})`, value: "all", className: "primary", submit: true }
+        ]
+      });
+    }
+
+    /* ── TAX WHAT-IF SIMULATOR CONTROLLER ── */
+    function updateTaxWhatIfSimulator() {
+      const box = q("taxWhatIfSimulator");
+      const slider = q("taxWhatIfSlider");
+      const metricsEl = q("taxWhatIfMetrics");
+      const addLabel = q("taxWhatIfAddLabel");
+      if (!box || !slider || !metricsEl) return;
+
+      const addAmount = num(slider.value);
+      const baseRebate = num(box.dataset.baseRebate);
+      const taxable = num(box.dataset.taxable);
+      const grossSlabTax = num(box.dataset.grossSlabTax);
+      const finalSourceTax = num(box.dataset.finalSourceTax);
+      const taxPaid = num(box.dataset.taxPaid);
+      const rebateRate = num(box.dataset.rebateRate) || 0.15;
+      const capPct = num(box.dataset.capPct) || 0.20;
+      const maxCap = num(box.dataset.maxCap) || 10000000;
+
+      const maxRebateBySlab = Math.round(taxable * 0.03);
+      const curEligible = Math.min(baseRebate, taxable * capPct, maxCap);
+      const curRebate = Math.min(Math.round(curEligible * rebateRate), maxRebateBySlab);
+
+      const newTotalInvested = baseRebate + addAmount;
+      const newEligible = Math.min(newTotalInvested, taxable * capPct, maxCap);
+      const newRebate = Math.min(Math.round(newEligible * rebateRate), maxRebateBySlab);
+      const extraTaxSaved = Math.max(0, newRebate - curRebate);
+
+      const newSlabTax = Math.max(0, grossSlabTax - newRebate);
+      const newTotalTax = newSlabTax + finalSourceTax;
+      const newTaxDue = Math.max(0, newTotalTax - taxPaid);
+
+      // Estimate months remaining until June 30 of the active assessment year
+      const endDt = parseDate(taxPeriod().end);
+      const nowDt = new Date();
+      const monthsRem = endDt && endDt > nowDt
+        ? Math.max(1, Math.ceil((endDt - nowDt) / (30.44 * 86400000)))
+        : 12;
+      const perMonthNeeded = Math.round(addAmount / monthsRem);
+
+      if (addLabel) addLabel.textContent = `+${money(addAmount)}`;
+      metricsEl.innerHTML = `
+        <div class="whatif-metric">
+          <span>Extra tax saved</span>
+          <strong class="positive">+${money(extraTaxSaved)}</strong>
+          <small>Total rebate: ${money(newRebate)}</small>
+        </div>
+        <div class="whatif-metric">
+          <span>Simulated net tax</span>
+          <strong>${money(newTotalTax)}</strong>
+          <small>${newTaxDue > 0 ? `Still due: ${money(newTaxDue)}` : "Fully covered by TDS"}</small>
+        </div>
+        <div class="whatif-metric">
+          <span>Monthly target</span>
+          <strong>${money(perMonthNeeded)}/mo</strong>
+          <small>Over ~${monthsRem} mo until FY end</small>
+        </div>
+      `;
+    }
+
+    /* ── EVENT DELEGATION & COMPONENT CONTROLLERS ── */
+    const closeAllRowMenus = () => {
+      document.querySelectorAll(".row-menu.open").forEach(m => {
+        m.classList.remove("open");
+        m.style.left = ""; m.style.top = ""; m.style.right = ""; m.style.bottom = "";
+      });
+    };
+
+    const placeRowMenu = (menu, btn) => {
+      const rect = btn.getBoundingClientRect();
+      const margin = 4;
+      const vwMin = 8;
+      const vwMax = window.innerWidth - 8;
+      const vhMax = window.innerHeight - 8;
+      menu.style.left = "-9999px";
+      menu.style.top = "-9999px";
+      menu.style.right = "";
+      menu.style.bottom = "";
+      const w = menu.offsetWidth;
+      const h = menu.offsetHeight;
+      let left = rect.right - w;
+      if (left < vwMin) left = vwMin;
+      if (left + w > vwMax) left = vwMax - w;
+      if (left < vwMin) left = vwMin;
+      const spaceBelow = vhMax - rect.bottom;
+      const spaceAbove = rect.top - margin;
+      const openBelow = spaceBelow >= h + margin || spaceBelow >= spaceAbove;
+      const top = openBelow ? rect.bottom + margin : rect.top - h - margin;
+      menu.style.left = Math.max(vwMin, Math.min(left, vwMax - w)) + "px";
+      menu.style.top = Math.max(margin, Math.min(top, vhMax - h)) + "px";
+    };
+
+    function executePaletteCommand(actionStr) {
+      if (!actionStr) return;
+      if (q("globalSearch")) q("globalSearch").value = "";
+      if (actionStr.startsWith("view:")) {
+        setView(actionStr.slice(5), true);
+        return;
+      }
+      if (actionStr === "cmd:theme") {
+        q("themeToggleBtn")?.click();
+        render();
+      } else if (actionStr === "cmd:privacy") {
+        if (typeof togglePrivacyMode === "function") togglePrivacyMode();
+      } else if (actionStr === "cmd:cloneSalary") {
+        setView("salary");
+        quickAddLastMonthSalary();
+      } else if (actionStr === "cmd:exportHtml") {
+        render();
+        downloadPortableHtml();
+      } else if (actionStr === "cmd:exportJson") {
+        render();
+        exportAll();
+      }
+    }
+
+    function executeQuickLogTx(qTx) {
+      if (!qTx || !qTx.amount) return;
+      pushHistory();
+      state.transactions = state.transactions || [];
+      state.transactions.push({
+        id: id(),
+        createdAt: new Date().toISOString(),
+        name: qTx.name,
+        type: qTx.type || "expense",
+        date: qTx.date || today,
+        amount: num(qTx.amount),
+        taxableAmount: 0,
+        category: qTx.category || "",
+        accountId: qTx.accountId || "",
+        affectsAccount: Boolean(qTx.accountId),
+        cashFlowMode: qTx.accountId ? "cash" : "memo",
+        notes: "Logged via Quick Command (Ctrl+K)"
+      });
+      if (q("globalSearch")) q("globalSearch").value = "";
+      save();
+      renderNav();
+      render();
+      if (typeof showUndoToast === "function") {
+        showUndoToast(`Logged ${qTx.name} (${money(qTx.amount)})`);
+      }
+    }
+
     function bindViewEvents() {
+      // Ensure global row-menu close listeners are attached once
+      if (!window._rowMenuGlobalWired) {
+        window._rowMenuGlobalWired = true;
+        document.addEventListener("click", closeAllRowMenus);
+        document.addEventListener("keydown", e => {
+          if (e.key === "Escape") closeAllRowMenus();
+        });
+        const dismissOnScroll = () => closeAllRowMenus();
+        window.addEventListener("resize", dismissOnScroll);
+        window.addEventListener("scroll", dismissOnScroll, true);
+      }
+
+      // Initialize interactive Tax What-If simulator when present in the view
+      if (q("taxWhatIfSimulator")) {
+        updateTaxWhatIfSimulator();
+        const slider = q("taxWhatIfSlider");
+        if (slider) slider.oninput = updateTaxWhatIfSimulator;
+        const optBtn = q("taxWhatIfOptimalBtn");
+        if (optBtn) {
+          optBtn.onclick = () => {
+            if (slider) {
+              slider.value = optBtn.dataset.optimal || 0;
+              updateTaxWhatIfSimulator();
+            }
+          };
+        }
+      }
+
       document.querySelectorAll("[data-add]").forEach(btn => btn.onclick = () => {
         let presets = null;
         if (btn.dataset.presets) {
@@ -8,49 +297,48 @@
       });
       if (q("quickAddSalaryBtn")) q("quickAddSalaryBtn").onclick = quickAddLastMonthSalary;
 
-      // ── Row kebab (⋯) menu ──
-      // The menu is position:fixed and placed via viewport coords computed
-      // from the button's getBoundingClientRect(). This makes it immune to
-      // being clipped by ANY ancestor's overflow (panel overflow:hidden,
-      // #view overflow:auto, the PF-ledger scroll-box, the settings lists,
-      // table cells, etc.). Both axes are clamped so the menu never runs off
-      // the right edge or the bottom of the viewport, and it flips above the
-      // button when there isn't room below (last rows of any list).
-      const closeAllRowMenus = () => {
-        document.querySelectorAll(".row-menu.open").forEach(m => {
-          m.classList.remove("open");
-          m.style.left = ""; m.style.top = ""; m.style.right = ""; m.style.bottom = "";
-        });
-      };
-      const placeRowMenu = (menu, btn) => {
-        const rect = btn.getBoundingClientRect();
-        const margin = 4;     // gap from button
-        const vwMin = 8;      // left-most the menu edge may si
-        const vwMax = window.innerWidth - 8;
-        const vhMax = window.innerHeight - 8;
-        // Show offscreen so we can measure real width/height first.
-        menu.style.left = "-9999px";
-        menu.style.top = "-9999px";
-        menu.style.right = "";
-        menu.style.bottom = "";
-        // Force a layout flush before reading dimensions.
-        const w = menu.offsetWidth;
-        const h = menu.offsetHeight;
-        // Horizontal: align to the button's right edge, but slide left if i
-        // would overflow the viewport. Never let it cross the left margin.
-        let left = rect.right - w;
-        if (left < vwMin) left = vwMin;
-        if (left + w > vwMax) left = vwMax - w;
-        if (left < vwMin) left = vwMin;
-        // Vertical: open below by default; flip above if no room below AND
-        // there's room above (handles the last row of every list).
-        const spaceBelow = vhMax - rect.bottom;
-        const spaceAbove = rect.top - margin;
-        const openBelow = spaceBelow >= h + margin || spaceBelow >= spaceAbove;
-        const top = openBelow ? rect.bottom + margin : rect.top - h - margin;
-        menu.style.left = Math.max(vwMin, Math.min(left, vwMax - w)) + "px";
-        menu.style.top = Math.max(margin, Math.min(top, vhMax - h)) + "px";
-      };
+      if (q("loadMoreTxBtn")) {
+        q("loadMoreTxBtn").onclick = () => {
+          _txRenderLimit += 150;
+          render();
+        };
+      }
+
+      if (q("quickLogConfirmBtn")) {
+        q("quickLogConfirmBtn").onclick = (e) => {
+          try {
+            const qTx = JSON.parse(e.currentTarget.dataset.quickTx);
+            executeQuickLogTx(qTx);
+          } catch (err) { console.error(err); }
+        };
+      }
+
+      document.querySelectorAll("[data-run-cmd]").forEach(btn => {
+        btn.onclick = () => executePaletteCommand(btn.dataset.runCmd);
+      });
+
+      // Hub sub-navigation bar clicks
+      document.querySelectorAll("[data-hub-nav]").forEach(btn => {
+        btn.onclick = (e) => {
+          e.preventDefault();
+          const targetView = btn.dataset.hubNav;
+          if (btn.dataset.hubTxtab) {
+            state.settings.transactionViewTab = btn.dataset.hubTxtab;
+            persistViewOnly();
+          }
+          if (btn.dataset.hubPlantab) {
+            state.settings.planningTab = btn.dataset.hubPlantab;
+            persistViewOnly();
+          }
+          if (activeView === targetView) {
+            renderNav();
+            render();
+          } else {
+            setView(targetView, true, true);
+          }
+        };
+      });
+
       document.querySelectorAll(".row-kebab").forEach(btn => btn.onclick = (e) => {
         e.stopPropagation();
         const menu = btn.nextElementSibling;
@@ -61,39 +349,16 @@
           placeRowMenu(menu, btn);
         }
       });
-      // Outside-click / Escape closes any open row menu (attached once).
-      if (!window._rowMenuGlobalWired) {
-        window._rowMenuGlobalWired = true;
-        document.addEventListener("click", closeAllRowMenus);
-        document.addEventListener("keydown", e => {
-          if (e.key === "Escape") closeAllRowMenus();
-        });
-        // If the page scrolls or the window resizes, an open menu would floa
-        // away from its row — close it rather than let it drift.
-        const dismissOnScroll = () => closeAllRowMenus();
-        window.addEventListener("resize", dismissOnScroll);
-        window.addEventListener("scroll", dismissOnScroll, true); // capture: catch nested scrollers (#view, PF box, settings lists)
-      }
 
-      // ── Investment row toggle (one-open-at-a-time) ──
-      // Each .inv-row can be expanded/collapsed by clicking the row. The
-      // detail box is always in the DOM (hidden via display:none); toggling
-      // adds/removes .open on the row to reveal it. Only one row open at a
-      // time — opening a new one auto-closes the previous. Kebab clicks are
-      // already stopPropagation'd above, so they open the menu without toggling.
       document.querySelectorAll("[data-inv-row]").forEach(row => {
-        row.addEventListener("click", (e) => {
-          // Don't toggle if clicking inside the detail-box (user may be
-          // clicking chips, links, or PF ledger actions inside it).
+        row.onclick = (e) => {
           if (e.target.closest(".inv-detail-box")) return;
-          // Don't toggle if clicking the kebab (already isolated, but belt-and-suspenders).
           if (e.target.closest(".row-menu-wrap")) return;
           const wasOpen = row.classList.contains("open");
-          // Close all sibling rows in the same container.
           const container = row.closest(".inv-rows");
           if (container) container.querySelectorAll(".inv-row.open").forEach(r => r.classList.remove("open"));
           if (!wasOpen) row.classList.add("open");
-        });
+        };
       });
       document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => {
         const [type, recId] = btn.dataset.edit.split(":");
@@ -125,7 +390,6 @@
         const [investmentId, entryId] = btn.dataset.pfDelete.split(":");
         deleteProvidentFundEntry(investmentId, entryId);
       });
-      // ── Phase 2: convert an existing transaction into a recurring rule ──
       document.querySelectorAll("[data-convert-recurring]").forEach(btn => btn.onclick = () => {
         const tx = (state.transactions || []).find(t => t.id === btn.dataset.convertRecurring);
         if (!tx) return;
@@ -136,7 +400,7 @@
         state.recurringRules.push(rule);
         state.settings.transactionViewTab = "automation";
         save();
-        showUndoToast ? showUndoToast(`"${rule.name}" is now recurring — next: ${rule.nextDate}`) : alert(`"${rule.name}" is now recurring — next: ${rule.nextDate}`);
+        if (typeof showUndoToast === "function") showUndoToast(`"${rule.name}" is now recurring — next: ${rule.nextDate}`);
         renderNav(); render();
       });
       document.querySelectorAll("[data-open]").forEach(btn => btn.onclick = () => {
@@ -147,19 +411,16 @@
         state.taxSeg = btn.dataset.seg;
         render();
       });
-      // ── Phase 2: Transactions ↔ Automation sub-tab switch ──
       document.querySelectorAll("[data-txview]").forEach(btn => btn.onclick = () => {
         state.settings.transactionViewTab = btn.dataset.txview;
         persistViewOnly();
         render();
       });
-      // ── Phase 4: Goals ↔ Forecast tab switch inside Planning ──
       document.querySelectorAll("[data-planningtab]").forEach(btn => btn.onclick = () => {
         state.settings.planningTab = btn.dataset.planningtab;
         persistViewOnly();
         render();
       });
-      // ── Phase 2: pause/resume a recurring rule ──
       document.querySelectorAll("[data-toggle-recurring]").forEach(btn => btn.onclick = () => {
         const rule = (state.recurringRules || []).find(r => r.id === btn.dataset.toggleRecurring);
         if (!rule) return;
@@ -167,7 +428,7 @@
         rule.active = !rule.active;
         save(); render();
       });
-      // ── Phase 3: budget month stepper ──
+      // Budget month stepper is a view-only navigation filter — do not trigger native save
       document.querySelectorAll("[data-budget-step]").forEach(btn => btn.onclick = () => {
         const cur = state.settings.budgetMonth || today.slice(0, 7);
         let [y, m] = cur.split("-").map(Number);
@@ -178,9 +439,9 @@
           else if (step === "next") { m++; if (m > 12) { m = 1; y++; } }
           state.settings.budgetMonth = `${y}-${String(m).padStart(2, "0")}`;
         }
-        save(); render();
+        persistViewOnly();
+        render();
       });
-      // ── Phase 4: forecast assumption controls ──
       if (q("faApply")) q("faApply").onclick = () => {
         const fa = state.forecastAssumptions || (state.forecastAssumptions = {});
         fa.monthsAhead = Math.max(1, num(q("faMonths").value) || 60);
@@ -215,7 +476,9 @@
           const dates = taxYearDates(val);
           state.settings.incomeYearStart = dates.start;
           state.settings.incomeYearEnd = dates.end;
+          if (q("periodBadgeLabel")) q("periodBadgeLabel").textContent = "AY " + val;
           save();
+          renderNav();
           render();
         };
       }
@@ -239,21 +502,34 @@
         pushHistory();
         const res = runBackfill();
         save();
-        alert(`Backfill complete: ${res.added} month-end snapshot${res.added === 1 ? "" : "s"} added.\nTotal snapshots: ${(state.netWorthSnapshots || []).length}.`);
+        showAppNotice("Backfill complete", `${res.added} month-end snapshot${res.added === 1 ? "" : "s"} added.\nTotal snapshots: ${(state.netWorthSnapshots || []).length}.`);
         render();
       };
+      // Settings PIN & Privacy & Native Sync buttons
+      if (q("configurePinBtn")) q("configurePinBtn").onclick = () => { if (typeof promptConfigurePin === "function") promptConfigurePin(); };
+      if (q("removePinBtn")) q("removePinBtn").onclick = () => { if (typeof promptRemovePin === "function") promptRemovePin(); };
+      if (q("lockWorkspaceBtn")) q("lockWorkspaceBtn").onclick = () => { if (typeof lockWorkspaceNow === "function") lockWorkspaceNow(); };
+      if (q("settingsPrivacyBtn")) q("settingsPrivacyBtn").onclick = () => { if (typeof togglePrivacyMode === "function") togglePrivacyMode(); };
+      if (q("settingsSyncNowBtn")) q("settingsSyncNowBtn").onclick = () => window.financeNativeBridge?.syncNow?.();
+      if (q("settingsChooseFolderBtn")) q("settingsChooseFolderBtn").onclick = () => window.financeNativeBridge?.chooseSyncFolder?.();
+      if (q("settingsSafetyVaultBtn")) q("settingsSafetyVaultBtn").onclick = () => window.financeNativeBridge?.openSafetyCenter?.();
+
       if (q("addCatBtn")) q("addCatBtn").onclick = () => {
         const name = q("newCatName")?.value?.trim(); const type = q("newCatType")?.value;
         if (!name) return;
-        pushHistory(); // ── FIX: was missing undo coverage
+        pushHistory();
         state.categories.push({ id: id(), type, name });
         save(); render();
       };
-      document.querySelectorAll("[data-del-cat]").forEach(btn => btn.onclick = () => {
+      document.querySelectorAll("[data-del-cat]").forEach(btn => btn.onclick = async () => {
         const catToDelete = state.categories.find(c => c.id === btn.dataset.delCat);
-        if (catToDelete?._system) { alert("System categories cannot be deleted. They are required for auto-generated transactions."); return; }
+        if (catToDelete?._system) {
+          showAppNotice("System category", "System categories cannot be deleted. They are required for auto-generated transactions.");
+          return;
+        }
         if (catToDelete?.isIncomeSourceOfTruth) {
-          if (!confirm(`"${catToDelete.name}" is used by the tax engine to classify income. Deleting it will affect tax calculations. Continue?`)) return;
+          const ok = await showAppConfirm("Delete tax category?", `"${catToDelete.name}" is used by the tax engine to classify income. Deleting it will affect tax calculations. Continue?`, { confirmLabel: "Delete", danger: true });
+          if (!ok) return;
         }
         pushHistory();
         state.categories = state.categories.filter(c => c.id !== btn.dataset.delCat);
@@ -263,35 +539,39 @@
         const name = q("newAccName")?.value?.trim(); const type = q("newAccType")?.value;
         const balance = num(q("newAccBalance")?.value);
         if (!name) return;
-        pushHistory(); // ── FIX: was missing undo coverage
+        pushHistory();
         state.accounts.push({ id: id(), name, type, balance, active: true });
         save(); render();
       };
-      document.querySelectorAll("[data-del-acc]").forEach(btn => btn.onclick = () => {
-        pushHistory(); // ── FIX: was missing undo coverage
+      document.querySelectorAll("[data-del-acc]").forEach(btn => btn.onclick = async () => {
+        const acc = state.accounts.find(a => a.id === btn.dataset.delAcc);
+        if (!acc) return;
+        const ok = await showAppConfirm("Remove account?", `Remove account "${acc.name}"?`, { confirmLabel: "Remove", danger: true });
+        if (!ok) return;
+        pushHistory();
         state.accounts = state.accounts.filter(a => a.id !== btn.dataset.delAcc);
         save(); render();
       });
-      document.querySelectorAll("[data-edit-acc-bal]").forEach(btn => btn.onclick = () => {
+      document.querySelectorAll("[data-edit-acc-bal]").forEach(btn => btn.onclick = async () => {
         const accId = btn.dataset.editAccBal;
         const account = state.accounts.find(a => a.id === accId);
         if (!account) return;
-        const newValStr = prompt(`Enter new starting balance for "${account.name}":`, account.balance);
+        const newValStr = await showAppPrompt("Starting balance", `Enter starting balance for "${account.name}":`, account.balance, "number");
         if (newValStr === null) return;
         const newVal = num(newValStr);
-        pushHistory(); // ── FIX: was missing undo coverage
+        pushHistory();
         account.balance = newVal;
         save(); render();
       });
       if (q("addSlabBtn")) q("addSlabBtn").onclick = () => {
-        pushHistory(); // ── FIX: was missing undo coverage
+        pushHistory();
         const threshold = num(q("newSlabThreshold")?.value); const rate = num(q("newSlabRate")?.value) / 100;
         const slabs = getTaxSlabsForYear(state?.settings?.taxYear);
-        slabs.push({ id: id(), threshold, rate }); // id() for stable identity
+        slabs.push({ id: id(), threshold, rate });
         save(); render();
       };
       document.querySelectorAll("[data-del-slab]").forEach(btn => btn.onclick = () => {
-        pushHistory(); // ── FIX: was missing undo coverage
+        pushHistory();
         const idx = parseInt(btn.dataset.delSlab);
         const slabs = getTaxSlabsForYear(state?.settings?.taxYear);
         slabs.splice(idx, 1);
@@ -301,22 +581,20 @@
         const idx = parseInt(inp.dataset.slabThreshold);
         const slabs = getTaxSlabsForYear(state?.settings?.taxYear);
         slabs[idx].threshold = num(inp.value);
-        save(); render(); // ── FIX: was missing render()
+        save(); render();
       });
       document.querySelectorAll("[data-slab-rate]").forEach(inp => inp.onchange = () => {
         const idx = parseInt(inp.dataset.slabRate);
         const slabs = getTaxSlabsForYear(state?.settings?.taxYear);
         slabs[idx].rate = num(inp.value) / 100;
-        save(); render(); // ── FIX: was missing render()
+        save(); render();
       });
       if (q("saveDeductionBtn")) q("saveDeductionBtn").onclick = () => {
         pushHistory();
         const newStdDed = { fraction: num(q("stdFraction")?.value), cap: num(q("stdCap")?.value) };
         const newRebate = { rate: num(q("rebateRate")?.value), investmentCapPercent: num(q("rebateCapPct")?.value), maxCapAbsolute: num(q("rebateMaxCap")?.value) };
-        // Write to global defaults (used as seed for new years)
         state.settings.standardDeduction = newStdDed;
         state.settings.rebateParams = newRebate;
-        // ── FIX: also write to the current year's per-year rule object ──
         const taxYear = state?.settings?.taxYear || currentTaxYear();
         state.settings.yearlyTaxRules = state.settings.yearlyTaxRules || {};
         if (!state.settings.yearlyTaxRules[taxYear]) state.settings.yearlyTaxRules[taxYear] = {};
@@ -367,51 +645,36 @@
         save(); render();
         showUndoToast("Salary template saved");
       };
+      // View-only sort/filter controls: use persistViewOnly() so changing a dropdown
+      // never triggers a full native file/sync save!
       if (q("transactionSort")) q("transactionSort").onchange = e => {
         state.settings.transactionSort = e.target.value;
-        save();
+        persistViewOnly();
         render();
       };
       if (q("transactionTypeFilter")) q("transactionTypeFilter").onchange = e => {
         state.settings.transactionTypeFilter = e.target.value;
-        // Reset the category filter if it no longer belongs to the selected Type
         const validCats = categoriesForTypeFilter(e.target.value);
         const cur = state.settings.transactionCategoryFilter || "";
         if (cur && !validCats.includes(cur)) state.settings.transactionCategoryFilter = "";
-        save();
+        _txRenderLimit = 120;
+        persistViewOnly();
         render();
       };
       if (q("transactionCategoryFilter")) q("transactionCategoryFilter").onchange = e => {
         state.settings.transactionCategoryFilter = e.target.value;
-        save();
+        _txRenderLimit = 120;
+        persistViewOnly();
         render();
       };
       if (q("transactionPeriodFilter")) q("transactionPeriodFilter").onchange = e => {
         state.settings.transactionPeriodFilter = e.target.value;
-        save();
+        _txRenderLimit = 120;
+        bumpStateRev();
+        persistViewOnly();
+        renderNav();
         render();
       };
-      if (q("expenseSort")) q("expenseSort").onchange = e => {
-        state.settings.expenseSort = e.target.value;
-        save();
-        render();
-      };
-      if (q("expenseCategoryFilter")) q("expenseCategoryFilter").onchange = e => {
-        state.settings.expenseCategoryFilter = e.target.value;
-        save();
-        render();
-      };
-      document.querySelectorAll("[data-export-type]").forEach(btn => {
-        btn.onclick = () => {
-          const type = btn.dataset.exportType;
-          if (type === "expenses") {
-            const exp = (state.transactions || []).filter(t => t.type === "expense" && withinPeriod(t.date));
-            download("expenses.json", JSON.stringify(exp, null, 2));
-          } else {
-            download(`${type}.json`, JSON.stringify(state[type], null, 2));
-          }
-        };
-      });
     }
 
     function bindSalaryFormEvents() {
@@ -470,7 +733,7 @@
         const pfEmployer = num(form.elements.pfEmployer.value);
         const tds = num(form.elements.tds.value);
 
-       const gross = basic + houseRent + medical + conveyance + bonus + other;
+        const gross = basic + houseRent + medical + conveyance + bonus + other;
         const deductions = pfEmployee + tds;
         const net = gross - deductions;
 
@@ -482,7 +745,7 @@
           form.querySelector(".form-grid").appendChild(summaryEl);
         }
 
-        summaryEl.innerHTML =
+        summaryEl.innerHTML = `
           <div style="display: flex; justify-content: space-between; font-weight: 600; margin-bottom: 4px;">
             <span>Gross Salary:</span>
             <span>${money(gross)}</span>
@@ -525,11 +788,6 @@
       const categorySelectEl = form.elements.category;
       if (!typeSelect || !categorySelectEl) return;
 
-      // ── Transfer UI coupling ──
-      // When Type = Transfer, "From account" becomes relevant and the Account field
-      // is relabeled "To account". For income/expense, "From account" is hidden and
-      // Account reverts to its generic label. Runs on type change and once on open
-      // so an edited transfer shows the right fields immediately.
       const applyTransferUI = () => {
         const isTransfer = typeSelect.value === "transfer";
         const fromWrap = form.elements.fromAccountId?.closest("label");
@@ -553,7 +811,7 @@
 
     function quickAddLastMonthSalary() {
       if (!state.salary || !state.salary.length) {
-        alert("No existing salary records to clone. Please add one manually first.");
+        showAppNotice("No salary history", "No existing salary records to clone. Please add one manually first.");
         return;
       }
 
@@ -592,7 +850,6 @@
       copy.tds = latest.tds > latest.basic * 0.2 ? 0 : latest.tds;
       copy.bonus = 0;
 
-      // Regenerate notes to clear one-time remarks and use template components
       let otherVal = 0;
       let otherBreakdown = [];
       if (Array.isArray(template.otherComponents)) {
@@ -608,7 +865,7 @@
         copy.notes = "";
       }
 
-        copy.gross = ["basic","houseRent","medical","conveyance","bonus","other"].reduce((s,k)=>s+num(copy[k]),0);
+      copy.gross = ["basic","houseRent","medical","conveyance","bonus","other"].reduce((s,k)=>s+num(copy[k]),0);
       pushHistory();
       state.salary.push(copy);
       syncSalaryTransaction(copy);
@@ -728,7 +985,7 @@
       return `<form id="recordForm" class="grid">
         <div class="settlement-card">
           <strong>${escapeHtml(inv.name)}</strong><br>
-          ${isEditingSettlemen
+          ${isEditingSettlement
             ? "Editing a saved settlement. Changes will update the linked transfer transaction and all tax figures."
             : "Net deposit will be principal returned + taxable gain - source tax. The deposit is recorded as a linked transfer, while gain and source tax stay on this investment for tax filing."}
         </div>
@@ -788,44 +1045,44 @@
     }
 
     function formFor(type, r) {
-      const accounts = (state?.accounts || []).map(a => `<option value="${a.id}" ${r.accountId === a.id ? "selected" : ""}>${a.name}</option>`).join("");
-      const fundingAccounts = (state?.accounts || []).map(a => `<option value="${a.id}" ${r.fundingAccountId === a.id ? "selected" : ""}>${a.name}</option>`).join("");
+      const accounts = (state?.accounts || []).map(a => `<option value="${a.id}" ${r.accountId === a.id ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("");
+      const fundingAccounts = (state?.accounts || []).map(a => `<option value="${a.id}" ${r.fundingAccountId === a.id ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("");
       const linkedAccountOptions = `<option value=""${!r.linkedAccountId ? " selected" : ""}>None (manual)</option>` + (state?.accounts || []).map(a => `<option value="${a.id}" ${r.linkedAccountId === a.id ? "selected" : ""}>${escapeHtml(a.name)}</option>`).join("");
       const liabilityOptions = `<option value=""${!r.linkedLiabilityId ? " selected" : ""}>None</option>` + (state?.liabilities || []).map(l => `<option value="${l.id}" ${r.linkedLiabilityId === l.id ? "selected" : ""}>${escapeHtml(l.name)}</option>`).join("");
       let fields = "";
-      if (type === "transactions") fields =
+      if (type === "transactions") fields = `
         ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["income","Income"],["expense","Expense"],["transfer","Transfer"]])}${input("date", "Date", r.date || today, "date")}${input("amount", "Amount", r.amount, "number")}
-        ${categorySelect(r.category, r.type || "income")}${selectHtml("fromAccountId", "From account (transfer only)", accounts)}${selectHtml("accountId", "Account", accounts)}${input("taxableAmount", "Taxable amount", r.taxableAmount, "number")}${selectHtml("linkedLiabilityId", "Linked liability (EMI/repayment, optional)", liabilityOptions)}        ${textarea("notes", "Notes", r.notes)}
-        ${checkbox("affectsAccount", "Affects account balance", r.affectsAccount !== false, "When checked, this transaction updates the linked account balance and total assets. Uncheck for memo-only records (e.g. amounts already declared elsewhere) that should not move cash.")}`;
-      if (type === "salary") fields =
+        ${categorySelect(r.category, r.type || "income")}${selectHtml("fromAccountId", "From account (transfer only)", accounts)}${selectHtml("accountId", "Account", accounts)}${input("taxableAmount", "Taxable amount", r.taxableAmount, "number")}${selectHtml("linkedLiabilityId", "Linked liability (EMI/repayment, optional)", liabilityOptions)}${textarea("notes", "Notes", r.notes)}
+        ${checkbox("affectsAccount", "Affects account balance", r.affectsAccount !== false, "When checked, this transaction updates the linked account balance and total assets. Uncheck for memo-only records.")}`;
+      if (type === "salary") fields = `
         ${input("name", "Salary month/name", r.name)}${input("date", "Pay date", r.date || today, "date")}${input("basic", "Basic", r.basic, "number")}${input("houseRent", "House rent", r.houseRent, "number")}
         ${input("medical", "Medical", r.medical, "number")}${input("conveyance", "Conveyance", r.conveyance, "number")}${input("bonus", "Bonus/festival", r.bonus, "number")}${input("other", "Other allowance", r.other, "number")}
         ${input("pfEmployee", "Employee PF", r.pfEmployee, "number")}${input("pfEmployer", "Employer PF", r.pfEmployer, "number")}${input("tds", "TDS", r.tds, "number")}${selectHtml("accountId", "Salary deposit account", accounts)}
         ${textarea("notes", "Notes", r.notes)}`;
-      if (type === "assets") fields =
-        ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["property","Property"],["vehicle","Vehicle"],["gold","Gold"],["receivable","Receivable"],["other","Other"]])}${input("institution", "Institution", r.institution)}${input("amount", "Original amount", r.amount, "number")}
+      if (type === "assets") fields = `
+        ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["property","Property"],["vehicle","Vehicle"],["gold","Gold"],["receivable","Receivable"],["other","Other"]])}${input("institution", "Institution / Location", r.institution)}${input("amount", "Original amount", r.amount, "number")}
         ${input("currentValue", "Current value", r.currentValue, "number")}${input("acquiredDate", "Acquired date", r.acquiredDate, "date")}${textarea("notes", "Notes", r.notes)}`;
-      if (type === "liabilities") fields =
+      if (type === "liabilities") fields = `
         ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["loan","Loan"],["credit_card","Credit card"],["tax_payable","Tax payable"],["family","Family obligation"],["other","Other"]])}${input("amount", "Original amount", r.amount, "number")}${input("balance", "Current balance", r.balance, "number")}
         ${input("rate", "Interest/profit rate", r.rate, "number")}${input("dueDate", "Next due date", r.dueDate, "date")}${textarea("notes", "Notes", r.notes)}`;
-      if (type === "investments") fields =
+      if (type === "investments") fields = `
         ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["savings_certificate","Savings certificate"],["dps","DPS"],["fdr","FDR"],["mutual_fund","Mutual fund"],["provident_fund","Provident fund"],["other","Other"]])}${input("institution", "Institution", r.institution)}${input("principal", "Principal", r.principal, "number")}
         ${input("currentValue", "Current value", r.currentValue, "number")}${input("profitRate", "Profit/rate %", r.profitRate, "number")}
         ${input("startDate", "Start date", r.startDate, "date")}${input("maturityDate", "Maturity date", r.maturityDate, "date")}${checkbox("rebateEligible", "Eligible for tax rebate", r.rebateEligible)}
         ${select("profitTaxMethod", "Profit tax treatment", r.profitTaxMethod || defaultProfitTaxMethod(r.type), [["final","Final tax (source tax = final tax)"],["slab","Slab tax (profit joins slab, source tax = credit)"]])}
         ${select("fundingMode", "Funding source", r.fundingMode || (r.type === "provident_fund" ? "payroll_pf" : "cash_account"), [["cash_account","Paid from cash/bank account"],["payroll_pf","Payroll PF - no cash outflow"],["external_opening","Opening/external asset - no cash outflow"]])}${selectHtml("fundingAccountId", "Funding account", fundingAccounts)}
         ${textarea("notes", "Notes", r.notes)}`;
-      if (type === "taxPayments") fields =
+      if (type === "taxPayments") fields = `
         ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["tds","TDS"],["ait","AIT"],["challan","Challan"],["refund","Refund adjustment"],["other","Other"]])}${input("amount", "Amount", r.amount, "number")}${input("date", "Date", r.date || today, "date")}
         ${input("taxYear", "Tax year", r.taxYear || (state?.settings?.taxYear || "2026-27"))}${selectHtml("accountId", "Deduct from account (optional)", accounts)}${textarea("notes", "Notes", r.notes)}`;
-      if (type === "goals") fields =
+      if (type === "goals") fields = `
         ${input("name", "Name", r.name)}${select("type", "Type", r.type, [["emergency_fund","Emergency fund"],["tax_planning","Tax planning"],["retirement","Retirement"],["purchase","Big purchase"],["travel","Travel"],["other","Other"]])}${input("target", "Target amount", r.target, "number")}${input("current", "Current saved", r.current, "number")}
         ${input("monthlyContribution", "Monthly contribution", r.monthlyContribution, "number")}${input("targetDate", "Target date", r.targetDate, "date")}${selectHtml("linkedAccountId", "Auto-track from account (optional)", linkedAccountOptions)}${textarea("notes", "Notes", r.notes)}`;
       if (type === "recurringRules") {
         const ruleTypeOpts = [["expense","Expense (payment)"],["income","Income"]];
         const freqOpts = [["monthly","Monthly"],["weekly","Weekly"],["yearly","Yearly"]];
         const domVal = r.dayOfMonth || (r.nextDate ? (() => { const d = parseDate(r.nextDate); return d ? d.getDate() : 5; })() : 5);
-        fields =
+        fields = `
         ${input("name", "Name", r.name)}${select("type", "Cash direction", r.type || "expense", ruleTypeOpts)}${input("amount", "Amount", r.amount, "number")}${categorySelect(r.category, r.type || "expense")}
         ${selectHtml("accountId", "Account", accounts)}${selectHtml("linkedLiabilityId", "Linked liability (EMI paydown, optional)", liabilityOptions)}
         ${select("frequency", "Frequency", r.frequency || "monthly", freqOpts)}${input("interval", "Every N (interval, 1=every, 3=quarterly)", r.interval || 1, "number")}${input("dayOfMonth", "Day of month (1-31, clamps to month end)", domVal, "number")}
@@ -835,7 +1092,7 @@
       if (type === "budgets") {
         const expCats = (state?.categories || []).filter(c => c.type === "expense");
         const expOpts = expCats.map(c => `<option value="${escapeHtml(c.name)}" ${r.category === c.name ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("");
-        fields =
+        fields = `
         <label>Category (one budget per category)<select name="category"><option value="">Select...</option>${expOpts}</select></label>
         ${input("monthlyLimit", "Monthly limit", r.monthlyLimit, "number")}${checkbox("rollover", "Rollover unused (reserved for a future version)", r.rollover || false, "Off in v1 — kept on the record so enabling it later is a flip, not a migration.")}
         ${textarea("notes", "Notes", r.notes)}`;
@@ -881,42 +1138,30 @@
       for (const [key, value] of form.entries()) rec[key] = value;
       if (editing.type === "investments") rec.rebateEligible = e.target.elements.rebateEligible?.checked || false;
       if (editing.type === "transactions") {
-        // The "Affects account balance" checkbox is checked by default in the form.
-        // Default to true if the control is somehow absent (older drawers) so a
-        // recorded transaction always moves money unless the user opts into memo-only.
         const cb = e.target.elements.affectsAccount;
         rec.affectsAccount = cb ? cb.checked : true;
         rec.cashFlowMode = rec.affectsAccount ? "cash" : "memo";
-        // ── Tighten add-transaction logic ──
-        // If the transaction is flagged to affect the account balance, it MUST be
-        // tied to an account — otherwise accountCurrentBalance() silently drops i
-        // from every account and the record becomes a no-op with no financial impact.
         if (rec.affectsAccount && !rec.accountId) {
-          alert("This transaction is set to affect the account balance, but no account is selected.\n\nPlease choose an account. To record it as memo-only (no cash impact), uncheck \"Affects account balance\".");
+          showAppNotice("Account required", "This transaction is set to affect an account balance, but no account is selected.\n\nPlease choose an account, or uncheck \"Affects account balance\" to record it as memo-only.");
           return;
         }
-        // ── Real A→B transfers ──
-        // A transfer must name both sides of the move and they must differ, so the
-        // balance math can debit one account and credit the other. Transfers canno
-        // be memo-only: if the user wants a no-op transfer they should uncheck the box.
         if (rec.type === "transfer") {
           if (!rec.fromAccountId || !rec.accountId) {
-            alert("A transfer needs both a 'From account' and a 'To account'. Please select both before saving.");
+            showAppNotice("Accounts required", "A transfer needs both a 'From account' and a 'To account'. Please select both before saving.");
             return;
           }
           if (rec.fromAccountId === rec.accountId) {
-            alert("The 'From account' and 'To account' for a transfer must be different.");
+            showAppNotice("Invalid transfer", "The 'From account' and 'To account' for a transfer must be different.");
             return;
           }
         } else {
-          // fromAccountId is only meaningful for transfers; clear it for income/expense
-          // so a stale value can't sit unnoticed in a non-transfer record.
           rec.fromAccountId = "";
         }
       }
       if (editing.type === "recurringRules") rec.active = e.target.elements.active?.checked !== false;
       if (editing.type === "budgets") rec.rollover = e.target.elements.rollover?.checked || false;
-      if (editing.type === "salary") rec.gross = ["basic","houseRent","medical","conveyance","bonus","other"].reduce((s,k)=>s+num(rec[k]),0);      const numericKeys = ["amount","taxableAmount","basic","houseRent","medical","conveyance","bonus","other","pfEmployee","pfEmployer","tds","currentValue","balance","rate","principal","taxableProfit","taxDeducted","profitRate","target","current","monthlyContribution","fundingAmount","interval","dayOfMonth","monthlyLimit"];
+      if (editing.type === "salary") rec.gross = ["basic","houseRent","medical","conveyance","bonus","other"].reduce((s,k)=>s+num(rec[k]),0);
+      const numericKeys = ["amount","taxableAmount","basic","houseRent","medical","conveyance","bonus","other","pfEmployee","pfEmployer","tds","currentValue","balance","rate","principal","taxableProfit","taxDeducted","profitRate","target","current","monthlyContribution","fundingAmount","interval","dayOfMonth","monthlyLimit"];
       numericKeys.forEach(k => { if (rec[k] !== undefined && rec[k] !== "") rec[k] = num(rec[k]); });
       if (editing.type === "investments" && rec.type === "provident_fund" && !editing.id) {
         addProvidentFundLedgerEntry(rec);
@@ -944,33 +1189,23 @@
           syncInvestmentFundingRecords(state);
         }
       }
-      // ── Phase 3: enforce one budget per category on create; archive existing ──
       if (editing.type === "budgets" && !editing.id && rec.category) {
         const dup = (state.budgets || []).find(b => b.category === rec.category && !b.archivedAt);
         if (dup) dup.archivedAt = today;
       }
-      // ── Phase 2: new recurring rule starts with empty generatedTxIds; existing
-      // rules keep their id so cascade links stay intact. ──
       if (editing.type === "recurringRules") {
         if (!editing.id) rec.generatedTxIds = [];
-        // Coerce empty optional dates to null
         if (rec.endDate === "") rec.endDate = null;
       }
-      // ── Phase 2.1: sync salary → transaction ──
       if (editing.type === "salary") {
         const savedRow = editing.id
           ? state.salary.find(r => r.id === editing.id)
           : state.salary[state.salary.length - 1];
-        if (savedRow) syncSalaryTransaction(savedRow);
+        if (savedRow) {
+          syncSalaryTransaction(savedRow);
+          syncPfLedgerFromSalary(savedRow);
+        }
       }
-      // ── Phase 2.2: sync salary → PF ledger ──
-      if (editing.type === "salary") {
-        const savedRow = editing.id
-          ? state.salary.find(r => r.id === editing.id)
-          : state.salary[state.salary.length - 1];
-        if (savedRow) syncPfLedgerFromSalary(savedRow);
-      }
-      // ── Phase 2.6: sync tax payment → account outflow ──
       if (editing.type === "taxPayments") {
         const savedPayment = editing.id
           ? state.taxPayments.find(r => r.id === editing.id)
@@ -1050,12 +1285,13 @@
       render();
     }
 
-    function deleteProvidentFundEntry(investmentId, entryId) {
+    async function deleteProvidentFundEntry(investmentId, entryId) {
       const pf = (state?.investments || []).find(i => i.id === investmentId && i.type === "provident_fund");
       if (!pf || !Array.isArray(pf.pfLedger)) return;
       const entry = pf.pfLedger.find(row => row.id === entryId);
       if (!entry) return;
-      if (!confirm(`Delete PF entry "${entry.name || entry.date || "PF entry"}"?\n\nThe provident fund balance, gain, and source tax totals will be recalculated immediately.`)) return;
+      const ok = await showAppConfirm("Delete PF entry?", `Delete PF entry "${entry.name || entry.date || "PF entry"}"?\n\nThe provident fund balance, gain, and source tax totals will be recalculated immediately.`, { confirmLabel: "Delete", danger: true });
+      if (!ok) return;
       pf.pfLedger = pf.pfLedger.filter(row => row.id !== entryId);
       recalcProvidentFund(pf);
       save();
@@ -1079,21 +1315,19 @@
       const grossProceeds = principalReturned + taxableProfit;
       const netProceeds = Math.max(0, grossProceeds - taxDeducted);
 
-      // Update Investment Record - KEEP all tax data intact!
-      inv.status = status; // This moves it to 'Historical'
+      inv.status = status;
       inv.withdrawalDate = withdrawalDate;
       inv.withdrawalAccountId = withdrawalAccountId;
       inv.principalReturned = principalReturned;
-      inv.taxableProfit = taxableProfit; // RETAINED FOR TAX
-      inv.taxDeducted = taxDeducted;     // RETAINED FOR TAX
-      inv.profitTaxMethod = profitTaxMethod; // User can override at withdrawal
+      inv.taxableProfit = taxableProfit;
+      inv.taxDeducted = taxDeducted;
+      inv.profitTaxMethod = profitTaxMethod;
       inv.withdrawalGrossProceeds = grossProceeds;
       inv.withdrawalNetProceeds = netProceeds;
-      inv.currentValue = 0; // Value in 'Active' section becomes 0
+      inv.currentValue = 0;
       inv.settlementNotes = settlementNotes;
       inv.closedAt = new Date().toISOString();
 
-      // Reconcile Funds with Accoun
       syncInvestmentSettlement(inv);
 
       save();
@@ -1103,9 +1337,6 @@
     }
 
     function syncInvestmentSettlement(inv) {
-      // NOTE: We do NOT call adjustAccountBalance() here. Settlement proceeds
-      // flow exclusively through the transfer transaction so accountCurrentBalance()
-      // counts them exactly once. Calling adjustAccountBalance() would double-count.
       const existing = (state.transactions || []).find(t => t.sourceType === "investments" && t.sourceId === inv.id && t.generatedKind === "investmentSettlement");
 
       const transfer = {
@@ -1134,7 +1365,6 @@
       } else {
         state.transactions.push(transfer);
       }
-      // No adjustAccountBalance call — balance is derived from transactions only.
     }
 
     function adjustAccountBalance(accountId, delta) {
@@ -1143,17 +1373,10 @@
       if (account) account.balance = num(account.balance) + delta;
     }
 
-
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.1 MIGRATION — syncSalaryTransactionsFromMigration
-    // Links existing unlinked salary transactions to their salary rows.
-    // Called once from migrateState on load.
-    // ══════════════════════════════════════════════════════════════════
     function syncSalaryTransactionsFromMigration(data) {
       const salaryCatName = (data.categories || []).find(c => c.isIncomeSourceOfTruth === "salary")?.name || "Salary";
       (data.salary || []).forEach(salaryRow => {
         if (!salaryRow.id) return;
-        // Skip if already tagged
         const alreadyLinked = (data.transactions || []).some(t =>
           t.sourceType === "salary" && t.sourceId === salaryRow.id && t.generatedKind === "salaryNet"
         );
@@ -1162,7 +1385,6 @@
         const net = Number(salaryRow.gross || 0) - Number(salaryRow.tds || 0) - Number(salaryRow.pfEmployee || 0);
         const month = String(salaryRow.date || "").slice(0, 7);
 
-        // Find an unlinked salary-category transaction for the same month with a close amoun
         const adopt = (data.transactions || []).find(t =>
           !t.sourceType && !t.generatedKind &&
           t.type === "income" &&
@@ -1178,10 +1400,6 @@
       });
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.1 — syncSalaryTransaction
-    // Creates or updates a salary-net income transaction for a salary row.
-    // ══════════════════════════════════════════════════════════════════
     function syncSalaryTransaction(salaryRow) {
       if (!salaryRow?.id) return;
       state.transactions = state.transactions || [];
@@ -1189,7 +1407,6 @@
       const salaryCat = (state.categories || []).find(c => c.isIncomeSourceOfTruth === "salary");
       const salaryCatName = salaryCat?.name || "Salary";
 
-      // Find preferred salary deposit accoun
       const salaryAccountId = salaryRow.accountId
         || (state.accounts || []).find(a => /salary/i.test(a.name || ""))?.id
         || preferredInvestmentFundingAccount(state)
@@ -1198,7 +1415,6 @@
       const net = num(salaryRow.gross) - num(salaryRow.tds) - num(salaryRow.pfEmployee);
       if (net <= 0) return;
 
-      // Find existing generated transaction
       const existing = state.transactions.find(t =>
         t.sourceType === "salary" && t.sourceId === salaryRow.id && t.generatedKind === "salaryNet"
       );
@@ -1216,7 +1432,7 @@
         generatedKind: "salaryNet",
         affectsAccount: true,
         cashFlowMode: "cash",
-        notes: `Auto-generated: Gross ${money(num(salaryRow.gross))} − PF ${money(num(salaryRow.pfEmployee))} − TDS ${money(num(salaryRow.tds))} = Net ${money(net)}
+        notes: `Auto-generated: Gross ${money(num(salaryRow.gross))} − PF ${money(num(salaryRow.pfEmployee))} − TDS ${money(num(salaryRow.tds))} = Net ${money(net)}`
       };
 
       if (existing) {
@@ -1226,20 +1442,10 @@
       }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.2 — PF ledger aggregation
-    // Instead of one ledger entry per salary month, all salary-driven PF
-    // contributions for a financial year are merged into a SINGLE aggregate
-    // entry. Manual entries (no salary linkage — e.g. the year-end interes
-    // you enter later, or historical opening balances) are always preserved
-    // as their own separate list items.
-    // ══════════════════════════════════════════════════════════════════
     function syncPfLedgerFromSalary(salaryRow, salaries) {
-      // Kept for call-site compatibility — delegates to the full rebuild so
-      // any salary add/edit/delete (or copy) refreshes every FY aggregate.
       state.investments = state.investments || [];
       const pfInv = state.investments.find(i => i.type === "provident_fund");
-      if (!pfInv) return; // PF fund doesn't exist yet — user must create manually firs
+      if (!pfInv) return;
       rebuildSalaryPfAggregates(pfInv, salaries || state.salary);
     }
 
@@ -1248,16 +1454,10 @@
       pfInv.pfLedger = Array.isArray(pfInv.pfLedger) ? pfInv.pfLedger : [];
       salaries = salaries || state?.salary || [];
 
-      // Keep ONLY manual entries: those with no salary linkage at all. This
-      // protects the year-end interest entry and opening balances. We drop
-      // every salary-derived row — both the new aggregate forma
-      // (sourceType === 'salaryAggregate') and the legacy per-month forma
-      // (any entry still carrying a sourceId) — then rebuild from scratch.
       const manualEntries = pfInv.pfLedger.filter(e =>
         e.sourceType !== 'salaryAggregate' && !e.sourceId
       );
 
-      // Group salary contributions by financial year and sum them.
       const byYear = {};
       salaries.forEach(s => {
         const fy = taxYearForDate(s.date);
@@ -1269,7 +1469,6 @@
         if (String(s.date || "") > String(byYear[fy].lastDate)) byYear[fy].lastDate = s.date;
       });
 
-      // One aggregate entry per financial year.
       const aggregates = Object.keys(byYear).sort().map(fy => {
         const info = byYear[fy];
         return {
@@ -1282,7 +1481,7 @@
           currentValue: info.total,
           taxableProfit: 0,
           taxDeducted: 0,
-          notes: `Aggregated employee + employer PF from salary records for AY ${fy}.
+          notes: `Aggregated employee + employer PF from salary records for AY ${fy}.`
         };
       });
 
@@ -1290,10 +1489,6 @@
       recalcProvidentFund(pfInv);
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.3 — liabilityCurrentBalance
-    // Computes outstanding balance by subtracting linked EMI transactions.
-    // ══════════════════════════════════════════════════════════════════
     function liabilityCurrentBalance(liabilityId, asOfDate = null) {
       const liability = (state?.liabilities || []).find(l => l.id === liabilityId);
       if (!liability) return 0;
@@ -1308,12 +1503,6 @@
       return Math.max(0, opening - repayments);
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.5 — accruedValue
-    // Computes investment value using simple interest accrual for
-    // savings_certificate, dps, and fdr types. All other types return
-    // stored currentValue (or principal as fallback).
-    // ══════════════════════════════════════════════════════════════════
     function accruedValue(inv, asOfDate = null) {
       if (!inv) return 0;
       if (inv.status === "withdrawn" || inv.status === "matured") return num(inv.currentValue || inv.principal);
@@ -1332,14 +1521,9 @@
       return Math.round(principal * (1 + (profitRate / 100) * (daysElapsed / 365)));
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 2.6 — syncTaxPaymentTransaction
-    // Creates or updates a cash outflow transaction for a tax paymen
-    // that has an accountId set.
-    // ══════════════════════════════════════════════════════════════════
     function syncTaxPaymentTransaction(payment) {
       if (!payment?.id || !payment.accountId || !num(payment.amount)) return;
-      if (payment.type === "refund") return; // refunds are inflows, handled separately
+      if (payment.type === "refund") return;
 
       state.transactions = state.transactions || [];
       const existing = state.transactions.find(t =>
@@ -1367,15 +1551,10 @@
       }
     }
 
-    // ══════════════════════════════════════════════════════════════════
-    // PHASE 4.3 — liabilitiesView
-    // Dedicated view with KPI cards and period scoping.
-    // ══════════════════════════════════════════════════════════════════
     function liabilitiesView(search) {
       const period = taxPeriod();
       const periodEnd = period.end;
       let rows = filterRows(state.liabilities || [], search);
-      // Period scope: only liabilities that existed by periodEnd
       rows = rows.filter(l => !l.openedDate || l.openedDate <= periodEnd);
 
       const totalOutstanding = rows.reduce((s, l) => s + liabilityCurrentBalance(l.id, periodEnd), 0);
@@ -1384,8 +1563,7 @@
       const d = derive();
       const debtToAsset = d.assets > 0 ? ((totalOutstanding / d.assets) * 100).toFixed(1) : "0.0";
 
-      const headers = ["Name", "Type", "Outstanding Balance", "Due date", "Linked"];
-      return
+      return `
         ${recordTabs("liabilities")}
         <div class="grid kpis" style="margin-bottom:14px;">
           ${kpi("Total Outstanding", totalOutstanding, `${rows.length} liabilities`, totalOutstanding === 0)}
@@ -1393,54 +1571,53 @@
           ${kpi("Next due date", nextDue ? nextDue.dueDate : "None upcoming", nextDue ? nextDue.name : "All clear", !nextDue || nextDue.dueDate > today)}
           ${kpi("Paid-off count", rows.filter(l => liabilityCurrentBalance(l.id, periodEnd) === 0).length, "Liabilities at zero balance", true)}
         </div>
-        <div class="panel"><div class="panel-body">
-          ${rows.length ? `<table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}<th></th></tr></thead><tbody>${rows.map(r => `<tr><td><strong>${escapeHtml(r.name)}</strong></td><td>${r.type}</td><td class="amount negative">${money(liabilityCurrentBalance(r.id, periodEnd))}</td><td>${r.dueDate || ""}</td><td>${linkText(r)}</td>${rowActions("liabilities", r.id)}</tr>`).join("")}</tbody></table>` : empty("liabilities")}
-        </div></div>`;
+        <div class="panel">
+          <div class="panel-head"><h2>Active &amp; past obligations</h2><button class="primary" data-add="liabilities">+ Add Liability</button></div>
+          <div class="panel-body" style="padding:0;">
+            ${rows.length ? `<table class="data-table"><thead><tr><th class="col-main">Name</th><th class="col-type">Type</th><th class="col-num">Outstanding Balance</th><th class="col-date">Due date</th><th class="col-link">Source</th><th class="col-act"></th></tr></thead><tbody>${rows.map(r => `<tr><td class="col-main"><strong>${escapeHtml(r.name)}</strong></td><td class="col-type"><span class="tchip other">${escapeHtml(String(r.type || "loan").replace(/_/g, " "))}</span></td><td class="amount col-num negative">${money(liabilityCurrentBalance(r.id, periodEnd))}</td><td class="col-date">${r.dueDate || "—"}</td><td class="col-link"><span class="link-pill">${escapeHtml(linkText(r))}</span></td>${rowActions("liabilities", r.id)}</tr>`).join("")}</tbody></table>` : `<div style="padding:16px;">${empty("liabilities")}</div>`}
+          </div>
+        </div>`;
     }
 
-    function deleteRecord(type, recId) {
+    async function deleteRecord(type, recId) {
       const rec = state[type].find(r => r.id === recId);
       if (!rec) return;
-      // ── Phase 3: budgets archive (soft-delete) instead of hard delete, so
-      // historical month comparisons stay intact. ──
       if (type === "budgets") {
-        if (!confirm(`Archive budget "${rec.category}"? Past months remain comparable; the budget stops tracking going forward.`)) return;
+        const ok = await showAppConfirm("Archive budget?", `Archive budget "${rec.category}"? Past months remain comparable; the budget stops tracking going forward.`, { confirmLabel: "Archive", danger: true });
+        if (!ok) return;
+        pushHistory();
         rec.archivedAt = today;
         save(); renderNav(); render();
         return;
       }
-      // ── Phase 2: recurring rules — offer to cascade-delete already-generated txs. ──
       if (type === "recurringRules") {
         const genTx = (state.transactions || []).filter(t => t.sourceType === "recurring" && t.sourceId === recId);
         let cascadeMsg = "";
         if (genTx.length && state.settings.cascadePolicy === "deleteGenerated") {
           cascadeMsg = `\n\n${genTx.length} already-generated transaction(s) will also be removed.`;
         }
-        if (!confirm(`Delete recurring rule "${rec.name}"?\nFuture generations stop.${cascadeMsg}`)) return;
+        const ok = await showAppConfirm("Delete recurring rule?", `Delete recurring rule "${rec.name}"?\nFuture generations stop.${cascadeMsg}`, { confirmLabel: "Delete", danger: true });
+        if (!ok) return;
+        pushHistory();
         if (genTx.length && state.settings.cascadePolicy === "deleteGenerated") {
           state.transactions = state.transactions.filter(t => !(t.sourceType === "recurring" && t.sourceId === recId));
         } else {
-          // unlink only: keep the txs, drop the rule linkage
           genTx.forEach(t => { delete t.sourceType; delete t.sourceId; delete t.generatedKind; });
         }
         state.recurringRules = state.recurringRules.filter(r => r.id !== recId);
         save(); renderNav(); render();
         return;
       }
-      const linkedDocs = (state.documents || []).filter(d => d.linkedType === type && d.linkedId === recId).length;
       const generatedTx = state.transactions.filter(t => t.sourceType === type && t.sourceId === recId).length;
-      const ok = confirm(`Delete "${rec.name || rec.type}"?\n\nGenerated transactions: ${generatedTx}\n\nLinked views will sync immediately.`);
+      const ok = await showAppConfirm("Delete record?", `Delete "${rec.name || rec.type}"?${generatedTx ? `\n\nLinked auto-generated transactions: ${generatedTx}` : ""}`, { confirmLabel: "Delete", danger: true });
       if (!ok) return;
-      // Settlement transactions removed via cascade below; no adjustAccountBalance needed
-      // because account balances are derived from transactions only.
+      pushHistory();
       if (type === "transactions" && rec.generatedKind === "assetTransfer") {
-        // Remove the transfer record from the asset too
         const asset = (state?.assets || []).find(a => a.id === rec.sourceId);
         if (asset && Array.isArray(asset.transfers)) {
           asset.transfers = asset.transfers.filter(t => t.id !== rec.transferId);
         }
       }
-      // Settlement transaction: removing it is enough; accountCurrentBalance() will no longer include it.
       state[type] = state[type].filter(r => r.id !== recId);
       if (state.settings.cascadePolicy === "deleteGenerated") {
         state.transactions = state.transactions.filter(t => !(t.sourceType === type && t.sourceId === recId));
@@ -1459,9 +1636,6 @@
         }
       });
       if (type === "salary") {
-        // Rebuild all salary-derived PF aggregates from the remaining salary
-        // records. Manual PF entries (interest, opening balances) are preserved
-        // inside rebuildSalaryPfAggregates.
         (state.investments || []).forEach(inv => {
           if (inv.type !== "provident_fund") return;
           rebuildSalaryPfAggregates(inv, state.salary);
@@ -1486,26 +1660,25 @@
       document.title = "Personal Finance OS" + (state?.settings?.owner ? " - " + state.settings.owner : "");
     }
 
-    function advanceTaxYear() {
+    async function advanceTaxYear() {
       const current = state.settings.taxYear || currentTaxYear();
       const ay = parseInt(current.split("-")[0]);
       const newLabel = `${ay + 1}-${String(ay + 2).slice(-2)}`;
       const newDates = taxYearDates(newLabel);
-      if (!confirm(`Advance tax year from ${current} to ${newLabel}?\n\n` +
-        `This will:\n• Change the viewing period to ${newLabel}\n` +
-        `• Create opening balance memo transactions for each account\n` +
-        `• Seed tax slabs and rules for ${newLabel} from current year\n` +
-        `• All historical data is preserved.`)) return;
+      const ok = await showAppConfirm(
+        `Advance to AY ${newLabel}?`,
+        `This will:\n• Switch the active assessment year to ${newLabel}\n• Create opening balance memo snapshots for each account\n• Seed tax slabs and deduction rules for ${newLabel}\n• Preserve all historical records intact.`,
+        { confirmLabel: `Advance to ${newLabel}` }
+      );
+      if (!ok) return;
 
-      pushHistory(); // allow undo
+      pushHistory();
 
-      // ── Snapshot account balances at end of closing year ──
       const closingEnd = state.settings.incomeYearEnd || taxYearDates(current).end;
-      const snapDate = newDates.start; // first day of new year
+      const snapDate = newDates.start;
       (state.accounts || []).forEach(account => {
         const closingBal = accountCurrentBalance(account.id, closingEnd);
         if (!closingBal) return;
-        // Only create snapshot if one doesn't already exist for this account+year
         const alreadyHasSnap = (state.transactions || []).some(t =>
           t.accountId === account.id && t._snapshotYear === current);
         if (!alreadyHasSnap) {
@@ -1515,22 +1688,20 @@
             name: `Opening balance snapshot – ${newLabel}`,
             type: "income",
             date: snapDate,
-            amount: 0,          // zero-amount memo — the real balance is reconstructed
+            amount: 0,
             taxableAmount: 0,
             category: "Opening balance memo",
             accountId: account.id,
             affectsAccount: false,
             cashFlowMode: "memo",
             _snapshotYear: current,
-            notes: `Auto-snapshot: closing balance ${money(closingBal)} at end of ${current}.
+            notes: `Auto-snapshot: closing balance ${money(closingBal)} at end of ${current}.`
           });
         }
       });
 
-      // ── Phase 1: capture a net-worth snapshot at the closing year-end (deduped by date) ──
       captureSnapshot(closingEnd);
 
-      // ── Seed new year's tax slabs and rules from current year ──
       state.settings.yearlyTaxSlabs = state.settings.yearlyTaxSlabs || {};
       if (!state.settings.yearlyTaxSlabs[newLabel]) {
         state.settings.yearlyTaxSlabs[newLabel] = JSON.parse(JSON.stringify(
@@ -1543,7 +1714,6 @@
         state.settings.yearlyTaxRules[newLabel] = JSON.parse(JSON.stringify(currentRules));
       }
 
-      // ── Switch to new year ──
       state.settings.taxYear = newLabel;
       state.settings.incomeYearStart = newDates.start;
       state.settings.incomeYearEnd = newDates.end;
@@ -1572,6 +1742,7 @@
             const parsed = JSON.parse(reader.result);
             const isPartial = Array.isArray(parsed) || (!parsed.settings && !parsed.categories && !parsed.accounts);
 
+            pushHistory();
             if (isPartial) {
               const mergeTable = (key, dataArray) => {
                 if (!state[key]) state[key] = [];
@@ -1591,12 +1762,11 @@
                 let targetKey = "transactions";
                 if (parsed.length > 0) {
                   const sample = parsed[0];
-                  if ("fileName" in sample || "extracted" in sample) targetKey = "documents";
-                  else if ("basic" in sample || "pfEmployee" in sample) targetKey = "salary";
+                  if ("basic" in sample || "pfEmployee" in sample) targetKey = "salary";
                   else if ("target" in sample) targetKey = "goals";
                 }
                 const count = mergeTable(targetKey, parsed);
-                alert(`Partial Import: Successfully merged ${count} records into your "${targetKey}" table!`);
+                showAppNotice("Partial import complete", `Successfully merged ${count} record(s) into "${targetKey}".`);
               } else {
                 let mergedLogs = [];
                 for (const key of Object.keys(parsed)) {
@@ -1606,21 +1776,21 @@
                   }
                 }
                 if (mergedLogs.length > 0) {
-                  alert(`Partial Import: Successfully merged ${mergedLogs.join(", ")}!`);
+                  showAppNotice("Partial import complete", `Successfully merged ${mergedLogs.join(", ")}.`);
                 } else {
-                  alert("No new records were merged.");
+                  showAppNotice("No new records", "All records in the selected file were already present.");
                 }
               }
             } else {
               state = mergeDefaults(parsed);
-              alert("System Restore: Full database restored successfully.");
+              showAppNotice("System restore complete", "Full finance dataset restored successfully.");
             }
             save();
             renderNav();
             render();
           } catch (err) {
             console.error("Import failed:", err);
-            alert("Could not process this JSON file.");
+            showAppNotice("Import failed", "Could not parse the selected JSON file.");
           }
         };
         reader.readAsText(file);
@@ -1633,8 +1803,6 @@
       const blob = new Blob([cleanHtml], { type: "text/html" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      // Timestamped filename so the download never collides with the currently-open file
-      // (Edge silently treats a matching name as an in-place save and overwrites without a prompt).
       const pad = n => String(n).padStart(2, "0");
       const d = new Date();
       const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
@@ -1644,19 +1812,26 @@
       a.remove();
       URL.revokeObjectURL(a.href);
 
-      // Clear undo history stack when saving/downloading a new file
       historyStack = [];
       updateUndoButton();
     }
 
     function getCleanPortableHtml() {
       const clone = document.documentElement.cloneNode(true);
+      clone.removeAttribute("data-finance-sync-status");
+      clone.removeAttribute("data-finance-native-host");
+      clone.removeAttribute("data-privacy");
       clone.querySelector('.app')?.removeAttribute('inert');
       clone.querySelector('#mobileNav')?.removeAttribute('inert');
       clone.querySelector('#moduleMenu')?.removeAttribute('open');
+      clone.querySelector('#appModal')?.removeAttribute('open');
       clone.querySelector('#workspaceActions')?.removeAttribute('open');
       clone.querySelector('#taxYearMenu')?.classList.remove('open');
       clone.querySelector('#periodBadge')?.setAttribute('aria-expanded', 'false');
+      clone.querySelector('#nativeSyncWrap')?.setAttribute('hidden', '');
+      clone.querySelector('#pinLockOverlay')?.setAttribute('hidden', '');
+      clone.querySelectorAll('.native-only-item').forEach(node => node.setAttribute('hidden', ''));
+      clone.querySelectorAll('.browser-only-item').forEach(node => node.removeAttribute('hidden'));
       clone.querySelectorAll('.undo-toast').forEach(node => node.remove());
       clone.querySelector("#financeNativeBridge")?.remove();
 
@@ -1705,6 +1880,7 @@
     }
 
     function seedData() {
+      pushHistory();
       const bank = state.accounts[1]?.id || "id_acc_default_2";
       state.transactions.push(
         { id: id(), name: "Monthly salary deposit", type: "income", date: today, amount: 120000, category: "Salary", taxableAmount: 120000, accountId: bank },
@@ -1717,9 +1893,16 @@
       save();
       renderNav();
       render();
+      showUndoToast("Sample data loaded");
     }
 
-    function resetData() {
+    async function resetData() {
+      const ok = await showAppConfirm(
+        "Reset all data?",
+        "Reset all data and start fresh? This clears every record on this device.",
+        { confirmLabel: "Reset everything", danger: true }
+      );
+      if (!ok) return;
       state = migrateState(safeClone(SEED_DATA));
       save();
       setView("home");

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover">
   <title>Finance OS — Personal workspace</title>
   <script id="embeddedState" type="application/json">{{SEED_STATE}}</script>
-  <script>try { if (localStorage.getItem("financeOS_theme") === "dark") document.documentElement.setAttribute("data-theme", "dark"); } catch (_) {}</script>
+  <script>try { if (localStorage.getItem("financeOS_theme") === "dark") document.documentElement.setAttribute("data-theme", "dark"); if (localStorage.getItem("financeOS_privacy") === "1") document.documentElement.setAttribute("data-privacy", "1"); } catch (_) {}</script>
   <style>
 {{STYLES}}
   </style>
@@ -19,7 +19,17 @@
         <div><strong>Finance OS</strong><span id="brandSubtitle">Personal workspace</span></div>
       </div>
       <nav id="nav" class="nav" aria-label="Workspace"></nav>
-      <div class="sidebar-footer"><span class="workspace-label">YOUR FINANCIAL WORKSPACE</span><p>A clearer view of your money.</p></div>
+      <div class="sidebar-footer">
+        <div id="nativeSyncWrap" class="native-sync-panel" hidden>
+          <button id="nativeSyncBtn" type="button" class="sync-pill" title="Sync status — click to sync or configure folder">
+            <span class="sync-dot" aria-hidden="true"></span>
+            <span id="nativeSyncLabel">Sync off</span>
+          </button>
+          <button id="nativeSafetyBtn" type="button" class="safety-btn" title="Open local Safety &amp; Restore vault">Safety vault</button>
+        </div>
+        <span class="workspace-label">YOUR FINANCIAL WORKSPACE</span>
+        <p id="sidebarFooterNote">A clearer view of your money. Press <kbd>Ctrl+K</kbd> for quick actions.</p>
+      </div>
     </aside>
     <main>
       <header class="topbar">
@@ -30,16 +40,21 @@
         </div>
         <div class="toolbar">
           <div class="search-wrap">
-            <input id="globalSearch" class="search" type="search" aria-label="Search all records" placeholder="Search all records…" autocomplete="off">
+            <input id="globalSearch" class="search" type="search" aria-label="Search or run command" placeholder="Search or type + 500 lunch (Ctrl+K)…" autocomplete="off">
             <button id="clearSearch" class="clear-search" type="button" aria-label="Clear search" title="Clear search">×</button>
           </div>
           <button id="addBtn" class="primary">+ Add record</button>
+          <button id="privacyToggleBtn" class="icon" title="Toggle privacy blur (Ctrl+B)" aria-label="Toggle privacy blur">👁</button>
           <button id="themeToggleBtn" class="icon" title="Toggle color theme" aria-label="Toggle dark mode">◐</button>
           <details class="toolbar-secondary" id="workspaceActions">
             <summary aria-label="Workspace actions" title="Export, save, and settings">•••</summary>
             <div class="toolbar-menu" id="workspaceActionMenu">
+              <button id="menuSyncNowBtn" class="native-only-item" hidden>Sync now</button>
+              <button id="menuChooseFolderBtn" class="native-only-item" hidden>Choose Conduit folder</button>
+              <button id="menuSafetyVaultBtn" class="native-only-item" hidden>Safety &amp; restore vault</button>
               <button id="savePortableBtn" title="Download a standalone HTML backup">Export portable HTML</button>
-              <button id="overwriteFileBtn" title="Save to a linked HTML file">Link / save file</button>
+              <button id="overwriteFileBtn" class="browser-only-item" title="Save to a linked HTML file">Link / save file</button>
+              <button id="lockNowBtn" hidden>Lock workspace</button>
               <button id="settingsBtn">Settings</button>
             </div>
           </details>
@@ -53,6 +68,28 @@
     <div class="module-menu-head"><div><span class="workspace-label">WORKSPACE</span><h2 id="moduleMenuTitle" class="module-menu-title">All modules</h2></div><button id="closeModuleMenu" class="icon" aria-label="Close navigation">×</button></div>
     <nav id="moduleMenuItems" class="module-menu-grid" aria-label="All modules"></nav>
   </dialog>
+  <dialog id="appModal" class="app-modal" aria-labelledby="appModalTitle">
+    <form id="appModalForm" method="dialog" class="app-modal-card">
+      <div class="app-modal-head">
+        <h2 id="appModalTitle">Confirm action</h2>
+        <button type="button" id="appModalClose" class="icon" aria-label="Close dialog">×</button>
+      </div>
+      <div id="appModalBody" class="app-modal-body"></div>
+      <div id="appModalActions" class="app-modal-actions"></div>
+    </form>
+  </dialog>
+  <div id="pinLockOverlay" class="pin-lock-overlay" hidden aria-modal="true" role="dialog" aria-labelledby="pinLockTitle">
+    <div class="pin-lock-card">
+      <div class="brand-mark" aria-hidden="true" style="margin:0 auto 12px;background:var(--green);color:#fff;">৳</div>
+      <h2 id="pinLockTitle">Workspace Locked</h2>
+      <p id="pinLockSub" class="muted">Enter your PIN to unlock Finance OS</p>
+      <form id="pinUnlockForm" class="pin-lock-form" autocomplete="off">
+        <input id="pinUnlockInput" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="••••" aria-label="PIN" autocomplete="off">
+        <div id="pinUnlockError" class="pin-lock-error" hidden>Incorrect PIN. Please try again.</div>
+        <button type="submit" class="primary" style="width:100%;">Unlock</button>
+      </form>
+    </div>
+  </div>
   <div id="drawer" class="drawer" aria-hidden="true">
     <div class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="drawerTitle" tabindex="-1">
       <div class="drawer-head"><h2 id="drawerTitle">Add record</h2><button id="closeDrawer" class="icon" title="Close" aria-label="Close form">×</button></div>

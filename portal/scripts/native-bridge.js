@@ -16,6 +16,37 @@
       return bridge.callHandler(name, ...args);
     }
 
+    function updateNativeSyncUi(phase, details) {
+      if (typeof document === "undefined") return;
+      if (document.documentElement?.dataset) {
+        document.documentElement.dataset.financeSyncStatus = phase || "";
+        document.documentElement.dataset.financeNativeHost = "1";
+      }
+      if (typeof document.getElementById !== "function") return;
+      const wrap = document.getElementById("nativeSyncWrap");
+      if (wrap) wrap.hidden = false;
+      const labelEl = document.getElementById("nativeSyncLabel");
+      const btnEl = document.getElementById("nativeSyncBtn");
+      const labels = {
+        disabled: "Sync off · Connect folder",
+        idle: "Synced",
+        syncing: "Syncing…",
+        blocked: "Sync blocked · Review",
+        error: "Sync error · Retry"
+      };
+      if (labelEl) labelEl.textContent = labels[phase] || "Sync off";
+      if (btnEl) {
+        btnEl.dataset.phase = phase || "disabled";
+        if (details && details.message) {
+          btnEl.title = details.message;
+        }
+      }
+      if (typeof document.querySelectorAll === "function") {
+        document.querySelectorAll(".native-only-item").forEach(el => { el.hidden = false; });
+        document.querySelectorAll(".browser-only-item").forEach(el => { el.hidden = true; });
+      }
+    }
+
     function refreshFromNative(nextState) {
       if (!nextState || typeof nextState !== "object") return;
       const normalized = mergeDefaults(nextState);
@@ -23,12 +54,14 @@
       // Loading the bridge and announcing readiness can send the same state
       // twice. Neither a duplicate nor an acknowledgement should replace DOM.
       if (key === stateKey(state)) return;
-      const scrollTop = q('view').scrollTop;
+      const viewEl = q('view');
+      const scrollTop = viewEl ? viewEl.scrollTop : 0;
       state = normalized;
+      if (typeof bumpStateRev === "function") bumpStateRev();
       try { localStorage.setItem(storeKey, JSON.stringify(state)); } catch (_) {}
       renderNav();
       render();
-      q('view').scrollTop = scrollTop;
+      if (viewEl) viewEl.scrollTop = scrollTop;
       updateBrand();
     }
 
@@ -47,6 +80,7 @@
         const saved = await callNative("saveFinanceState", serialized);
         if (saved !== true) throw new Error('Native save was not acknowledged');
         lastSent = serialized;
+        if (typeof markClean === "function") markClean();
       } catch (error) {
         console.error('Native save failed; retaining pending changes for retry.', error);
       } finally {
@@ -96,12 +130,49 @@
           refreshFromNative(parsed);
           lastSent = JSON.stringify(state);
         },
-        syncStatus(status) {
-          document.documentElement.dataset.financeSyncStatus = status || "";
+        syncStatus(status, details) {
+          updateNativeSyncUi(status || "", details || null);
+        },
+        chooseSyncFolder() {
+          return callNative("chooseSyncFolder");
+        },
+        syncNow() {
+          return callNative("syncNow");
+        },
+        openSafetyCenter() {
+          return callNative("openSafetyCenter");
+        },
+        syncTheme(theme) {
+          return callNative("syncTheme", theme);
+        },
+        onAppResume() {
+          if (typeof checkPinLockOnResume === "function") checkPinLockOnResume();
         }
       };
 
+      updateNativeSyncUi("disabled", null);
+
+      if (typeof document !== "undefined" && typeof document.getElementById === "function") {
+        const syncBtn = document.getElementById("nativeSyncBtn");
+        if (syncBtn) syncBtn.onclick = () => callNative("syncNow");
+        const safetyBtn = document.getElementById("nativeSafetyBtn");
+        if (safetyBtn) safetyBtn.onclick = () => callNative("openSafetyCenter");
+        const menuSync = document.getElementById("menuSyncNowBtn");
+        if (menuSync) menuSync.onclick = () => { const wa = document.getElementById("workspaceActions"); if (wa) wa.open = false; callNative("syncNow"); };
+        const menuFolder = document.getElementById("menuChooseFolderBtn");
+        if (menuFolder) menuFolder.onclick = () => { const wa = document.getElementById("workspaceActions"); if (wa) wa.open = false; callNative("chooseSyncFolder"); };
+        const menuSafety = document.getElementById("menuSafetyVaultBtn");
+        if (menuSafety) menuSafety.onclick = () => { const wa = document.getElementById("workspaceActions"); if (wa) wa.open = false; callNative("openSafetyCenter"); };
+      }
+
       await callNative("bridgeReady");
+
+      try {
+        if (typeof document !== "undefined" && document.documentElement?.getAttribute) {
+          const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+          callNative("syncTheme", isDark ? "dark" : "light");
+        }
+      } catch (_) {}
     }
 
     window.addEventListener("flutterInAppWebViewPlatformReady", startBridge);

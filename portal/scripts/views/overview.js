@@ -1,4 +1,4 @@
-        function homeView() {
+    function homeView() {
       const d = derive();
       const period = taxPeriod();
       const allTx = state?.transactions || [];
@@ -24,10 +24,8 @@
       });
       const cfMax = Math.max(1, ...cfSeries.map(p => Math.max(p.inc, p.exp)));
 
-      // ── Period (income year) totals for headline strip ──
       const periodNet = d.txIncome - d.txExpense;
 
-      // ── Net-worth breakdown by source (liquid / invested / assets) ──
       const accounts = state?.accounts || [];
       const liquidTotal = accounts.reduce((s, a) => s + accountCurrentBalance(a.id, period.end), 0);
       const periodInvestments = (state?.investments || [])
@@ -46,12 +44,9 @@
       ].filter(s => s.value > 0);
       const nwTotal = Math.max(1, netWorthSources.reduce((s, x) => s + x.value, 0));
 
-      // ── Period income by source (salary vs investments vs other) ──
       const periodTxs = allTx.filter(t => withinPeriod(t.date, period));
       const salaryGross = (state?.salary || []).filter(s => withinPeriod(s.date, period)).reduce((s, r) => s + num(r.gross) + num(r.pfEmployer), 0);
       const otherIncome = periodTxs.filter(t => t.type === "income" && t.generatedKind !== "salaryNet" && t.generatedKind !== "assetTransfer").reduce((s, t) => s + num(t.amount), 0);
-      // Period-scoped investment profit — same engine the Tax module uses,
-      // so past-year profit (e.g. FY24-25 PF interest) doesn't leak in.
       const invProfit = num(yearTaxSummary(period).investmentIncome);
       const incomeBySource = [
         { label: "Salary", value: salaryGross, color: "#2d6a4f" },
@@ -60,7 +55,6 @@
       ].filter(s => s.value > 0);
       const incTotal = Math.max(1, incomeBySource.reduce((s, x) => s + x.value, 0));
 
-      // ── Period expense by category (top 5) ──
       const expByCat = {};
       periodTxs.filter(t => t.type === "expense").forEach(t => {
         const k = t.category || "Uncategorized";
@@ -74,7 +68,6 @@
         .reduce((s, [, v]) => s + v, 0);
       if (expOther > 0) expTop.push({ label: "Other", value: expOther, color: "#95a5a6" });
 
-      // ── Upcoming maturities (strictly future) ──
       function isFutureDate(dateStr) {
         if (!dateStr) return false;
         const dt = parseDate(dateStr);
@@ -89,22 +82,18 @@
         .sort((a, b) => String(a.maturityDate).localeCompare(String(b.maturityDate)))
         .slice(0, 5);
 
-      // ── Recent activity (last 6 within period, desc) ──
       const recent = periodTxs
         .slice()
         .sort((a, b) => String(b.date).localeCompare(String(a.date)))
         .slice(0, 6);
 
-      // ── Goals snapshot ──
       const goals = (state?.goals || []).slice(0, 5);
 
-      // ── Quick actions strip ──
       function quickAction(addType, label, preset) {
         const dataAttrs = preset ? ` data-presets='${JSON.stringify(preset)}'` : "";
         return `<button class="qa" data-add="${addType}"${dataAttrs}>${label}</button>`;
       }
 
-      // ── Reusable horizontal bar (a labelled progress bar with value) ──
       function barRow(item, total) {
         const pct = Math.max(0, Math.min(100, (item.value / total) * 100));
         return `<div class="bar-row">
@@ -113,7 +102,7 @@
         </div>`;
       }
 
-      return
+      return `
         <div class="home-head">
           <div class="home-head-left">
             <span class="workspace-label">THE BIG PICTURE</span><h2>Your money, in focus.</h2>
@@ -133,6 +122,7 @@
           ${kpi("Savings rate", `${d.savingsRate.toFixed(1)}%`, "This calendar month", d.savingsRate >= 20)}
         </div>
         ${budgetAlertsStrip()}
+        ${typeof continuityAlertsStrip === "function" ? continuityAlertsStrip() : ""}
 
         <div class="grid two" style="margin-top:14px">
           <div class="panel">
@@ -189,7 +179,7 @@
         </div>
 
         <div class="grid three" style="margin-top:14px">
-          ${miniList("Upcoming maturities", upcoming, i => `<strong>${i.name}</strong><br><span class="muted">Matures ${i.maturityDate} · ${money(i.currentValue || i.principal)}</span>`, "investments")}
+          ${miniList("Upcoming maturities", upcoming, i => `<strong>${escapeHtml(i.name)}</strong><br><span class="muted">Matures ${i.maturityDate} · ${money(i.currentValue || i.principal)}</span>`, "investments")}
           <div class="panel">
             <div class="panel-head"><h2>Top expenses</h2><span class="muted">${money(d.txExpense)} this year</span></div>
             <div class="panel-body split-list">
@@ -198,16 +188,16 @@
           </div>
           ${miniList("Open goals", goals, g => {
             const pct = g.target ? Math.min(100, Math.round((num(g.current) / num(g.target)) * 100)) : 0;
-            return `<strong>${g.name}</strong><br><div class="bar-track" style="margin:4px 0"><div class="bar-fill" style="width:${pct}%;background:var(--green)"></div></div><span class="muted">${money(g.current)} of ${money(g.target)} · ${pct}%</span>`;
+            return `<strong>${escapeHtml(g.name)}</strong><br><div class="bar-track" style="margin:4px 0"><div class="bar-fill" style="width:${pct}%;background:var(--green)"></div></div><span class="muted">${money(g.current)} of ${money(g.target)} · ${pct}%</span>`;
           }, "planning")}
         </div>
 
         <div class="grid two" style="margin-top:14px">
-          ${miniList("Recent activity", recent, t => `<strong>${t.name || "Untitled"}</strong><br><span class="muted">${t.date} · ${t.category || "—"}</span>`, "transactions", t => (t.type === "income" ? "+" : "−") + money(num(t.amount)), t => t.type === "income")}
+          ${miniList("Recent activity", recent, t => `<strong>${escapeHtml(t.name || "Untitled")}</strong><br><span class="muted">${t.date} · ${escapeHtml(t.category || "—")}</span>`, "transactions", t => (t.type === "income" ? "+" : "−") + money(num(t.amount)), t => t.type === "income")}
           <div class="panel">
             <div class="panel-head"><h2>Tax pulse</h2><button data-open="tax">Open tax</button></div>
             <div class="panel-body split-list">
-              <div class="row-card"><div><h3>Estimated tax</h3><p>Slab tax after standard deduction & rebate</p></div><div class="amount">${money(d.estimatedTax)}</div></div>
+              <div class="row-card"><div><h3>Estimated tax</h3><p>Slab tax after standard deduction &amp; rebate</p></div><div class="amount">${money(d.estimatedTax)}</div></div>
               <div class="row-card"><div><h3>Paid / TDS</h3><p>Salary TDS + manual payments + source tax</p></div><div class="amount">${money(d.taxPaid)}</div></div>
               <div class="row-card"><div><h3 class="${d.taxDue > 0 ? "negative" : "positive"}">${d.taxDue > 0 ? "Still due" : (d.taxPaid > d.estimatedTax ? "Refundable surplus" : "Settled")}</h3><p>${d.taxDue > 0 ? "Top up before filing" : "No further payment required"}</p></div><div class="amount ${d.taxDue > 0 ? "negative" : "positive"}">${money(d.taxDue > 0 ? d.taxDue : (d.taxPaid - d.estimatedTax))}</div></div>
             </div>

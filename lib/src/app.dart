@@ -6,12 +6,12 @@ import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'export/export_service.dart';
 import 'repository/finance_repository.dart';
+import 'safety/sync_safety.dart';
 import 'sync/folder_sync_coordinator.dart';
 import 'web/finance_asset_server.dart';
 import 'widgets/app_theme.dart';
-import 'widgets/finance_host_toolbar.dart';
 
-class FinanceOsApp extends StatelessWidget {
+class FinanceOsApp extends StatefulWidget {
   const FinanceOsApp({
     super.key,
     required this.repository,
@@ -26,15 +26,36 @@ class FinanceOsApp extends StatelessWidget {
   final WebViewEnvironment? webViewEnvironment;
 
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'Finance OS Synced',
-    debugShowCheckedModeBanner: false,
-    theme: financeHostTheme(),
-    home: FinanceOsShell(
-      repository: repository,
-      sync: sync,
-      server: server,
-      webViewEnvironment: webViewEnvironment,
+  State<FinanceOsApp> createState() => _FinanceOsAppState();
+}
+
+class _FinanceOsAppState extends State<FinanceOsApp> {
+  final ValueNotifier<ThemeMode> _themeMode = ValueNotifier(ThemeMode.system);
+
+  @override
+  void dispose() {
+    _themeMode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => ValueListenableBuilder<ThemeMode>(
+    valueListenable: _themeMode,
+    builder: (context, mode, _) => MaterialApp(
+      title: 'Finance OS Synced',
+      debugShowCheckedModeBanner: false,
+      theme: financeHostTheme(brightness: Brightness.light),
+      darkTheme: financeHostTheme(brightness: Brightness.dark),
+      themeMode: mode,
+      home: FinanceOsShell(
+        repository: widget.repository,
+        sync: widget.sync,
+        server: widget.server,
+        webViewEnvironment: widget.webViewEnvironment,
+        onThemeChanged: (isDark) {
+          _themeMode.value = isDark ? ThemeMode.dark : ThemeMode.light;
+        },
+      ),
     ),
   );
 }
@@ -46,18 +67,21 @@ class FinanceOsShell extends StatefulWidget {
     required this.sync,
     required this.server,
     required this.webViewEnvironment,
+    this.onThemeChanged,
   });
 
   final FinanceRepository repository;
   final FolderSyncCoordinator sync;
   final FinanceAssetServer server;
   final WebViewEnvironment? webViewEnvironment;
+  final ValueChanged<bool>? onThemeChanged;
 
   @override
   State<FinanceOsShell> createState() => _FinanceOsShellState();
 }
 
-class _FinanceOsShellState extends State<FinanceOsShell> {
+class _FinanceOsShellState extends State<FinanceOsShell>
+    with WidgetsBindingObserver {
   InAppWebViewController? _controller;
   StreamSubscription<Map<String, dynamic>>? _stateSubscription;
   StreamSubscription<FolderSyncStatus>? _syncSubscription;
@@ -70,6 +94,7 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _statusNotifier = ValueNotifier(widget.sync.currentStatus);
     _webView = InAppWebView(
       webViewEnvironment: widget.webViewEnvironment,
@@ -98,15 +123,23 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
     _syncSubscription = widget.sync.statuses.listen((status) {
       if (!mounted) return;
       _statusNotifier.value = status;
-      _controller?.evaluateJavascript(
-        source:
-            'window.financeNativeBridge?.syncStatus(${jsonEncode(status.phase.name)});',
-      );
+      _pushSyncStatusToWeb(status);
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      unawaited(widget.sync.syncNow());
+      _controller?.evaluateJavascript(
+        source: 'window.financeNativeBridge?.onAppResume?.();',
+      );
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _stateSubscription?.cancel();
     _syncSubscription?.cancel();
     _statusNotifier.dispose();
@@ -114,6 +147,20 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
     unawaited(widget.repository.dispose());
     unawaited(widget.server.stop());
     super.dispose();
+  }
+
+  void _pushSyncStatusToWeb(FolderSyncStatus status) {
+    if (!_pageReady) return;
+    final payload = jsonEncode({
+      'phase': status.phase.name,
+      'message': status.message,
+      'hasFolder': widget.sync.root != null,
+      'lastSyncAt': status.lastSyncAt?.toIso8601String(),
+    });
+    _controller?.evaluateJavascript(
+      source:
+          'window.financeNativeBridge?.syncStatus(${jsonEncode(status.phase.name)}, $payload);',
+    );
   }
 
   void _registerHandlers(InAppWebViewController controller) {
@@ -130,6 +177,7 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
             arguments.first as String,
             notifyChanges: false,
           );
+          unawaited(widget.sync.syncNow());
           return true;
         },
       )
@@ -150,10 +198,48 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
         },
       )
       ..addJavaScriptHandler(
+        handlerName: 'chooseSyncFolder',
+        callback: (_) async {
+          await _chooseFolder();
+          return widget.sync.root != null;
+        },
+      )
+      ..addJavaScriptHandler(
+        handlerName: 'syncNow',
+        callback: (_) async {
+          if (widget.sync.root == null) {
+            await _chooseFolder();
+          } else if (_status.phase == FolderSyncPhase.blocked) {
+            await _showSafetyCenter();
+          } else {
+            await widget.sync.syncNow();
+          }
+          return true;
+        },
+      )
+      ..addJavaScriptHandler(
+        handlerName: 'openSafetyCenter',
+        callback: (_) async {
+          await _showSafetyCenter();
+          return true;
+        },
+      )
+      ..addJavaScriptHandler(
+        handlerName: 'syncTheme',
+        callback: (arguments) {
+          if (arguments.isNotEmpty) {
+            final isDark = arguments.first == 'dark' || arguments.first == true;
+            widget.onThemeChanged?.call(isDark);
+          }
+          return true;
+        },
+      )
+      ..addJavaScriptHandler(
         handlerName: 'bridgeReady',
         callback: (_) {
           _pageReady = true;
           _pushStateToWeb(widget.repository.state);
+          _pushSyncStatusToWeb(_status);
           return true;
         },
       );
@@ -166,13 +252,10 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
     );
   }
 
-  Future<void> _runPageFunction(String functionName) async {
-    await _controller?.evaluateJavascript(source: '$functionName();');
-  }
-
   Future<void> _chooseFolder() async {
     final selected = await widget.sync.chooseFolder();
     if (!mounted || !selected) return;
+    _pushSyncStatusToWeb(_status);
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Conduit sync folder connected.')),
     );
@@ -180,14 +263,15 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
 
   Future<void> _showSafetyCenter() async {
     final restorePoints = await widget.repository.safetyRestorePoints();
+    final activeState = widget.repository.state;
     if (!mounted) return;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Safety & restore'),
+        title: const Text('Safety & restore vault'),
         content: SizedBox(
-          width: 560,
-          height: 430,
+          width: 580,
+          height: 450,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -208,7 +292,8 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
               ],
               Text(
                 'Automatic restore points are stored only on this device, '
-                'outside the Conduit folder.',
+                'outside the Conduit folder. Each row shows how that point '
+                'differs from your current data.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
@@ -227,6 +312,10 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
                         separatorBuilder: (_, _) => const Divider(height: 1),
                         itemBuilder: (_, index) {
                           final point = restorePoints[index];
+                          final diff = FinanceDataDiff.between(
+                            activeState,
+                            point.state,
+                          );
                           return ListTile(
                             dense: true,
                             contentPadding: EdgeInsets.zero,
@@ -234,7 +323,7 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
                             title: Text(point.reason),
                             subtitle: Text(
                               '${_formatDateTime(point.createdAt.toLocal())} · '
-                              '${point.totalRecords} records',
+                              '${point.totalRecords} records · ${diff.summaryText}',
                             ),
                             trailing: TextButton(
                               onPressed: () async {
@@ -242,6 +331,7 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
                                 await _confirmRestore(
                                   point.backupId,
                                   point.createdAt.toLocal(),
+                                  diff.summaryText,
                                 );
                               },
                               child: const Text('Restore'),
@@ -282,15 +372,20 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
     );
   }
 
-  Future<void> _confirmRestore(String backupId, DateTime createdAt) async {
+  Future<void> _confirmRestore(
+    String backupId,
+    DateTime createdAt,
+    String diffSummary,
+  ) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Restore this data?'),
         content: Text(
           'Finance OS will create a backup of the current data, then restore '
-          'the point from ${_formatDateTime(createdAt)}. The recovery will '
-          'sync as new compensating changes.',
+          'the point from ${_formatDateTime(createdAt)}.\n\n'
+          'Impact vs current state: $diffSummary\n\n'
+          'The recovery will sync as new compensating changes.',
         ),
         actions: [
           TextButton(
@@ -348,15 +443,6 @@ class _FinanceOsShellState extends State<FinanceOsShell> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: FinanceHostToolbar(
-      statusListenable: _statusNotifier,
-      hasSyncFolder: () => widget.sync.root != null,
-      chooseFolder: _chooseFolder,
-      syncNow: widget.sync.syncNow,
-      showSafetyCenter: _showSafetyCenter,
-      exportHtml: () => _runPageFunction('downloadPortableHtml'),
-      exportJson: () => _runPageFunction('exportAll'),
-    ),
-    body: _webView,
+    body: SafeArea(child: _webView),
   );
 }

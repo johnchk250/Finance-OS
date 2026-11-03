@@ -1,7 +1,8 @@
     /* ── CONTROLLERS & RENDERING ── */
     function render() {
       const view = q("view");
-      const search = q("globalSearch").value.trim().toLowerCase();
+      if (!view) return;
+      const search = (q("globalSearch")?.value || "").trim();
       q("clearSearch")?.classList.toggle("show", Boolean(search));
       if (search) {
         view.innerHTML = globalSearchView(search);
@@ -10,12 +11,17 @@
         return;
       }
       const renderers = {
-        home: homeView, transactions: () => tableView("transactions", search),
-        salary: () => salaryView(search), expenses: () => expensesView(search),
-        assets: () => assetsView(search), liabilities: () => liabilitiesView(search),
-        investments: () => investmentsView(search), tax: taxView,
-        planning: () => planningView(search), reports: reportsView,
-        budgets: budgetsView, settings: settingsView
+        home: homeView,
+        transactions: () => tableView("transactions", ""),
+        salary: () => salaryView(""),
+        assets: () => assetsView(""),
+        liabilities: () => liabilitiesView(""),
+        investments: () => investmentsView(""),
+        tax: taxView,
+        planning: () => planningView(""),
+        reports: reportsView,
+        budgets: budgetsView,
+        settings: settingsView
       };
       view.innerHTML = (renderers[activeView] || homeView)();
       wrapBareTables();
@@ -35,12 +41,12 @@
         if (table.dataset.scrollWrapped === "1") return;
         const parent = table.parentElement;
         if (!parent) return;
-        const parentStyle = getComputedStyle(parent);
-        const alreadyScrolls = parentStyle.overflowX === "auto" || parentStyle.overflowX === "scroll";
-        if (alreadyScrolls) { table.dataset.scrollWrapped = "1"; return; }
+        if (parent.classList.contains("table-scroll") || parent.style.overflowX === "auto") {
+          table.dataset.scrollWrapped = "1";
+          return;
+        }
         const wrapper = document.createElement("div");
         wrapper.className = "table-scroll";
-        // min-width keeps columns legible; set to the table's natural width.
         wrapper.style.cssText = "overflow-x:auto; -webkit-overflow-scrolling:touch;";
         parent.insertBefore(wrapper, table);
         wrapper.appendChild(table);

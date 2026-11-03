@@ -3,9 +3,6 @@
       const account = (state?.accounts || []).find(a => a.id === accountId);
       if (!account) return 0;
       let startBalance = num(account.balance);
-      // A transaction touches this account if it credits it (accountId) OR, for a
-      // real A→B transfer, debits it (fromAccountId). Legacy one-sided transfers
-      // (e.g. investment settlement) have no fromAccountId and only credit here.
       const txs = (state?.transactions || []).filter(t => {
         if (!transactionAffectsAccount(t)) return false;
         const isCredit = t.accountId === accountId;
@@ -17,7 +14,6 @@
       let total = startBalance;
       for (const t of txs) {
         if (t.type === "transfer") {
-          // +amount on the destination (accountId), −amount on the source (fromAccountId).
           total += t.accountId === accountId ? num(t.amount) : -num(t.amount);
         } else if (t.type === "income") {
           total += num(t.amount);
@@ -30,30 +26,30 @@
 
     function derive() {
       const period = taxPeriod();
+      const cacheKey = typeof currentStateRevKey === "function"
+        ? currentStateRevKey(`derive:${period.label}:${period.start}:${period.end}`)
+        : "";
+      if (cacheKey && _cachedDeriveKey === cacheKey && _cachedDeriveVal) {
+        return _cachedDeriveVal;
+      }
+
       const periodEnd = period.end;
       const transactions = state?.transactions || [];
-      const salary = state?.salary || [];
       const investments = state?.investments || [];
       const assetsList = state?.assets || [];
       const liabilitiesList = state?.liabilities || [];
       const accounts = state?.accounts || [];
-      const taxPayments = state?.taxPayments || [];
 
-      // Period-scoped income/expense (only transactions within the selected tax year)
       const periodTxs = transactions.filter(t => withinPeriod(t.date, period));
       const txIncome = periodTxs.filter(t => t.type === "income" && t.generatedKind !== "assetTransfer").reduce((s, t) => s + num(t.amount), 0);
       const txExpense = periodTxs.filter(t => t.type === "expense").reduce((s, t) => s + num(t.amount), 0);
 
-      // Current month (always wall-clock month, not period-scoped — for the live savings rate KPI)
       const month = today.slice(0, 7);
       const monthTx = transactions.filter(t => (t.date || "").startsWith(month));
       const monthIncome = monthTx.filter(t => t.type === "income").reduce((s, t) => s + num(t.amount), 0);
       const monthExpense = monthTx.filter(t => t.type === "expense").reduce((s, t) => s + num(t.amount), 0);
 
-      // Assets: all scoped to periodEnd so past-year views show past-year balances
       const periodAssets = assetsList.filter(a => !a.acquiredDate || a.acquiredDate <= periodEnd);
-      // Period-aware investment filter: include investment if it had started by periodEnd AND
-      // was NOT yet withdrawn/matured by periodEnd (i.e. withdrawalDate is after periodEnd, or still active)
       const periodInvestments = investments
         .filter(i => !i.startDate || i.startDate <= periodEnd)
         .filter(i => {
@@ -66,13 +62,11 @@
         periodAssets.reduce((s, a) => s + valueOfAsset(a, periodEnd), 0) +
         periodInvestments.reduce((s, i) => s + accruedValue(i, periodEnd), 0) +
         accounts.reduce((s, a) => s + accountCurrentBalance(a.id, periodEnd), 0);
-      // Liabilities: only those that existed by periodEnd (mirrors liabilitiesView),
-      // so past-year views don't include debts opened after that date.
       const periodLiabilities = liabilitiesList.filter(l => !l.openedDate || l.openedDate <= periodEnd);
       const liabilities = periodLiabilities.reduce((s, l) => s + liabilityCurrentBalance(l.id, periodEnd), 0);
 
-      const taxSummary = yearTaxSummary();
-      return {
+      const taxSummary = yearTaxSummary(period);
+      const result = {
         txIncome, txExpense, monthIncome, monthExpense,
         assets, liabilities, netWorth: assets - liabilities,
         savingsRate: monthIncome ? ((monthIncome - monthExpense) / monthIncome) * 100 : 0,
@@ -83,10 +77,13 @@
         rebateBase: taxSummary.rebateBase,
         periodEnd
       };
+      if (cacheKey) {
+        _cachedDeriveKey = cacheKey;
+        _cachedDeriveVal = result;
+      }
+      return result;
     }
 
-    // ── Phase 1: date-parametric net worth (reused by history + later phases) ──
-    // rangeContains: true if date falls within [start, end] inclusive (handles nulls).
     function rangeContains(date, range) {
       if (!date) return false;
       if (range.start && date < range.start) return false;
@@ -94,8 +91,6 @@
       return true;
     }
 
-    // netWorthAsOf: value everything as of a given date, using the SAME helpers derive() uses.
-    // Mirrors derive()'s entity filtering (only assets/liabilities/investments that existed by asOf).
     function netWorthAsOf(asOf) {
       const asOfDate = asOf || taxPeriod().end;
       const assetsList = state?.assets || [];
@@ -132,16 +127,7 @@
       };
     }
 
-    /* ════════════════════════════════════════════════════════════════════════
-       PHASE 2-4 ENGINE BLOCK
-       compute.* (P3) · generateTransaction + recurring engine (P2) · projectNetWorth (P4)
-       All additive; existing call sites untouched.
-       ════════════════════════════════════════════════════════════════════════ */
-
-    // ── PHASE 3: compute layer — period-scoped aggregation reused by budgets,
-    // home widgets, and forecasts. derive() numbers come from the same source.
     const compute = {
-      // Sum income/expense across transactions matching a filter.
       txTotals(filter = {}) {
         const txs = state?.transactions || [];
         const matched = txs.filter(t => {
@@ -150,10 +136,7 @@
           if (filter.type && t.type !== filter.type) return false;
           if (filter.category && t.category !== filter.category) return false;
           if (filter.accountId && filter.accountId !== "*" && t.accountId !== filter.accountId) return false;
-          // Exclude the synthetic asset-transfer income so it never counts as spend/income.
           if (t.generatedKind === "assetTransfer") return false;
-          // Exclude investment-funding outflows — they move cash → invested asset,
-          // not real consumption (matches derive()'s treatment).
           if (t.generatedKind === "investmentFunding" && filter.type === "expense") return false;
           return true;
         });
@@ -161,9 +144,7 @@
         const expense = matched.filter(t => t.type === "expense").reduce((s, t) => s + num(t.amount), 0);
         return { income, expense, net: income - expense, count: matched.length };
       },
-      // Net worth as of a date — thin wrapper over the keystone (P1).
       netWorthAsOf(date) { return netWorthAsOf(date); },
-      // Per-category spend in a range — used by budgets + home top-N.
       categoryBreakdown(filter = {}) {
         const out = {};
         const txs = state?.transactions || [];
@@ -178,17 +159,12 @@
         });
         return out;
       },
-      // Income - expense - savings for a single calendar month (YYYY-MM-DD date).
       monthlyNet(monthDate) {
         const m = String(monthDate || today).slice(0, 7);
         return compute.txTotals({ from: m + "-01", to: m + "-31" });
       }
     };
 
-    // ── PHASE 2: consolidated transaction generator.
-    // One canonical shape + idempotency. The 4 existing sync* paths keep their
-    // own functions but this is the single path NEW generators (recurring, forecast)
-    // use, so sourceType taxonomy stays consistent.
     function generateTransaction(template, asOfDate) {
       const tx = {
         id: id(),
@@ -211,7 +187,6 @@
       return tx;
     }
 
-    // Advance a recurring rule's nextDate by its interval (frequency × interval).
     function advanceRecurringDate(dateStr, rule) {
       const d = parseDate(dateStr);
       if (!d) return dateStr;
@@ -219,8 +194,7 @@
       const step = Math.max(1, num(rule.interval) || 1);
       if (freq === "weekly") d.setDate(d.getDate() + 7 * step);
       else if (freq === "yearly") d.setFullYear(d.getFullYear() + step);
-      else d.setMonth(d.getMonth() + step); // monthly (default)
-      // Clamp dayOfMonth to the month's last day (31 → 28/29/30 in short months).
+      else d.setMonth(d.getMonth() + step);
       const dom = num(rule.dayOfMonth);
       if (freq !== "weekly" && dom >= 28) {
         const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
@@ -232,8 +206,6 @@
       return `${y}-${m}-${day}`;
     }
 
-    // Find the canonical date a recurring rule should fire in a given month,
-    // respecting dayOfMonth clamping (returns YYYY-MM-DD).
     function recurringDateForMonth(year, monthIdx, rule) {
       const dom = Math.max(1, num(rule.dayOfMonth) || 1);
       const lastDay = new Date(year, monthIdx + 1, 0).getDate();
@@ -241,15 +213,10 @@
       return `${year}-${String(monthIdx + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
     }
 
-    // ── PHASE 2: recurring generation engine.
-    // Scans rules for nextDate <= today (capped 60 days back), emits txs via
-    // generateTransaction, advances nextDate. Idempotent: guarded by checking
-    // whether a tx already exists for that rule+date. Returns {generated, gaps}
-    // so the caller can decide whether to prompt (large gap = catch-up prompt).
     function processRecurringRules(opts = {}) {
       const rules = (state.recurringRules || []).filter(r => r.active);
       const accountIds = new Set((state.accounts || []).map(a => a.id));
-      const cutoff = today; // never generate future-dated beyond today
+      const cutoff = today;
       const maxBacktrackDays = 60;
       const hardFloor = (() => {
         const d = parseDate(today); if (!d) return "1900-01-01";
@@ -260,25 +227,21 @@
       const rulesNeedingPrompt = [];
 
       for (const rule of rules) {
-        // Skip if the funding account no longer exists.
         if (rule.accountId && !accountIds.has(rule.accountId)) {
           rule._flagMissingAccount = true; continue;
         }
         rule._flagMissingAccount = false;
         if (!rule.nextDate) continue;
         let next = rule.nextDate;
-        // Count how many instances are due, to decide on the catch-up prompt.
         let dueCount = 0;
         let cursor = next;
-        const safetyCap = 240; // hard stop against runaway loops
+        const safetyCap = 240;
         while (cursor <= cutoff && dueCount < safetyCap) {
           if (cursor < hardFloor) break;
           dueCount++;
           cursor = advanceRecurringDate(cursor, rule);
           if (cursor > cutoff) break;
         }
-        // A gap of more than 1 missed instance triggers the user prompt unless
-        // we're in force/skip mode (opts.mode = "all" | "once" | "skip").
         if (dueCount > 1 && !opts.mode) {
           rulesNeedingPrompt.push({ rule, dueCount });
           continue;
@@ -302,7 +265,7 @@
                 sourceId: rule.id,
                 generatedKind: "recurring",
                 linkedLiabilityId: rule.linkedLiabilityId || null,
-                notes: `Recurring: ${rule.name} (${rule.frequency})
+                notes: `Recurring: ${rule.name} (${rule.frequency})`
               }, n);
               state.transactions.push(tx);
               rule.generatedTxIds = rule.generatedTxIds || [];
@@ -311,19 +274,18 @@
               if (mode === "once") { break; }
             }
             const advanced = advanceRecurringDate(n, rule);
-            if (advanced <= n) break; // guard against non-advancing rules
+            if (advanced <= n) break;
             n = advanced;
           }
           rule.nextDate = n;
         };
-        if (opts.mode === "skip") { /* advance past the gap without emitting */ rule.nextDate = cursor; }
+        if (opts.mode === "skip") { rule.nextDate = cursor; }
         else if (opts.mode === "once") emit("once");
         else emit("all");
       }
       return { generated, rulesNeedingPrompt };
     }
 
-    // Convert an existing transaction into a recurring rule template (P2 UX).
     function ruleFromTransaction(tx) {
       if (!tx) return null;
       const dom = (() => { const d = parseDate(tx.date); return d ? d.getDate() : 5; })();
@@ -347,10 +309,6 @@
       };
     }
 
-    // ── PHASE 4: deterministic net-worth projection.
-    // Composes P1 netWorthAsOf + P2 recurring + P3 budgets. Pure function —
-    // never mutates state. Returns [{month, date, assets, liabilities, netWorth}]
-    // with the first point being today (truth), rest projected (assumption).
     function projectNetWorth(opts = {}) {
       const fa = Object.assign({
         monthsAhead: 60, monthlySavingsOverride: null, annualReturnPct: 8,
@@ -364,7 +322,6 @@
       let assets = start.assets;
       let liabilities = start.liabilities;
 
-      // Baseline monthly savings: override or trailing-3-month average net.
       let baselineSavings = num(fa.monthlySavingsOverride);
       if (!baselineSavings) {
         let sum = 0, counted = 0;
@@ -378,7 +335,6 @@
         baselineSavings = counted ? (sum / counted) : 0;
       }
 
-      // Projected recurring net per month (salary in - rent/EMI out), virtual.
       const rules = (state.recurringRules || []).filter(r => r.active);
       let recurringNet = 0;
       rules.forEach(r => {
@@ -386,12 +342,9 @@
         recurringNet += (r.type === "income" ? amt : -amt);
       });
 
-      // Budget influence: if sticking to budgets, cap projected discretionary spend.
-      let budgetCap = 0; // reduction applied to net if spend would exceed budgets
+      let budgetCap = 0;
       if (fa.stickToBudgets) {
         const budgets = (state.budgets || []).filter(b => !b.archivedAt);
-        // Approximate: budgets set a ceiling; if trailing spend exceeds it we
-        // assume the user tightens to the limit (a positive delta to savings).
         budgets.forEach(b => {
           const avg = (() => {
             let s = 0, c = 0;
@@ -410,16 +363,10 @@
       const series = [{ month: 0, date: today, assets, liabilities, netWorth: assets - liabilities }];
       const base = new Date();
       for (let i = 1; i <= months; i++) {
-        // Apply growth to invested/liquid (approximated as assets less hard real-estate).
-        // Use a blended 60% of assets as growth-eligible (liquid+invested typical share).
         const growthEligible = assets * 0.6;
         assets += growthEligible * growthRate;
-        // Net cash flow this month: baseline savings (inflated to stay real) + recurring + budget cap.
         const monthSavings = baselineSavings * Math.pow(1 + inflation, i) + recurringNet + budgetCap;
-        // Positive savings accumulate as assets; deficits draw them down. Shown honestly.
         assets += monthSavings;
-        // Liabilities drift down as EMIs pay them (approximated by recurring EMI outflows already counted).
-        // Keep simple: liabilities reduce ~proportionally to scheduled recurring if linked.
         const emiPaydown = rules
           .filter(r => r.linkedLiabilityId && r.type === "expense")
           .reduce((s, r) => s + num(r.amount), 0);
@@ -449,7 +396,6 @@
       const rp = taxRules.rebateParams || { rate: 0.15, investmentCapPercent: 0.20, maxCapAbsolute: 10000000 };
       const eligibleCap = Math.min(rebateBase, taxableIncome * rp.investmentCapPercent, rp.maxCapAbsolute);
       const rebate = eligibleCap * rp.rate;
-      // ITA 2023: rebate cannot exceed 3% of taxable income — apply same cap used in taxView()
       const maxRebateBySlab = Math.round(taxableIncome * 0.03);
       const cappedRebate = Math.min(rebate, maxRebateBySlab);
       return Math.max(0, Math.round(tax - cappedRebate));

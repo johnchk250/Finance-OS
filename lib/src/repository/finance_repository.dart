@@ -43,7 +43,11 @@ class FinanceRepository {
     this._conflicts,
     this._lastLoadedSnapshotId,
     this._safetyVault,
-  );
+  ) : _cachedUnits = projectFinanceUnits(_state),
+      _cachedUnitHashes = {
+        for (final entry in projectFinanceUnits(_state).entries)
+          entry.key: contentHash(entry.value),
+      };
 
   static const _uuid = Uuid();
   static const _metadataVersion = 3;
@@ -51,6 +55,8 @@ class FinanceRepository {
   final Directory _supportDirectory;
   final String deviceId;
   Map<String, dynamic> _state;
+  Map<String, Map<String, dynamic>> _cachedUnits;
+  Map<String, String> _cachedUnitHashes;
   int _nextSequence;
   final Map<String, VersionVector> _vectors;
   final Map<String, String> _winners;
@@ -72,6 +78,14 @@ class FinanceRepository {
   int get conflictCount => _conflicts.length;
   String? get lastLoadedSnapshotId => _lastLoadedSnapshotId;
   bool hasApplied(String opId) => _appliedOperations.contains(opId);
+
+  void _rebuildUnitCache() {
+    _cachedUnits = projectFinanceUnits(_state);
+    _cachedUnitHashes = {
+      for (final entry in _cachedUnits.entries)
+        entry.key: contentHash(entry.value),
+    };
+  }
 
   static Future<FinanceRepository> open() async {
     final root = await getApplicationSupportDirectory();
@@ -243,6 +257,7 @@ class FinanceRepository {
       _serializeMutation(() async {
         if (_lastLoadedSnapshotId == snapshot.snapshotId) return false;
         _state = mergePortableFinanceState(snapshot.state, _state);
+        _rebuildUnitCache();
         _vectors
           ..clear()
           ..addAll(snapshot.vectors);
@@ -321,6 +336,7 @@ class FinanceRepository {
     if (assessment.isSuspicious &&
         approvedCandidateHash != assessment.candidateHash) {
       _state = originalState;
+      _rebuildUnitCache();
       _vectors
         ..clear()
         ..addAll(originalVectors);
@@ -351,6 +367,7 @@ class FinanceRepository {
         reason: 'Before Conduit sync',
       );
     }
+    _rebuildUnitCache();
     await _persist();
     if (changed) _changes.add(state);
     return ReconciliationResult(
@@ -377,28 +394,31 @@ class FinanceRepository {
   }) async {
     final nextState = _decodeMap(serializedState);
     _advanceSequencePastKnownVectors();
-    final portableChanged =
-        contentHash(portableFinanceState(_state)) !=
-        contentHash(portableFinanceState(nextState));
-    if (createSafetyBackup && portableChanged) {
-      await _safetyVault.createRestorePoint(
-        _state,
-        reason: 'Before local change',
-      );
-    }
-    final previousUnits = projectFinanceUnits(_state);
+    final previousUnits = _cachedUnits;
+    final previousHashes = _cachedUnitHashes;
     final nextUnits = projectFinanceUnits(nextState);
+    final nextHashes = <String, String>{};
     final keys = <String>{...previousUnits.keys, ...nextUnits.keys}.toList()
       ..sort();
     final operations = <FinanceOperation>[];
+    var safetyBackedUp = false;
 
     for (final key in keys) {
       final before = previousUnits[key];
       final after = nextUnits[key];
-      if (before != null &&
-          after != null &&
-          contentHash(before) == contentHash(after)) {
+      final beforeHash =
+          previousHashes[key] ?? (before == null ? null : contentHash(before));
+      final afterHash = after == null ? null : contentHash(after);
+      if (afterHash != null) nextHashes[key] = afterHash;
+      if (before != null && after != null && beforeHash == afterHash) {
         continue;
+      }
+      if (createSafetyBackup && !safetyBackedUp) {
+        safetyBackedUp = true;
+        await _safetyVault.createRestorePoint(
+          _state,
+          reason: 'Before local change',
+        );
       }
       final separator = key.indexOf('/');
       final collection = key.substring(0, separator);
@@ -420,7 +440,7 @@ class FinanceRepository {
         vector: vector,
         createdAt: DateTime.now().toUtc(),
         payload: after == null ? null : cloneJsonMap(after),
-        baseHash: before == null ? null : contentHash(before),
+        baseHash: beforeHash,
       );
       operations.add(operation);
       _vectors[key] = vector;
@@ -430,6 +450,8 @@ class FinanceRepository {
     }
 
     _state = cloneJsonMap(nextState);
+    _cachedUnits = nextUnits;
+    _cachedUnitHashes = nextHashes;
     await _persist();
     if (notifyChanges && operations.isNotEmpty) _changes.add(state);
     return operations;
@@ -441,6 +463,7 @@ class FinanceRepository {
   Future<bool> _applyRemoteOperation(FinanceOperation operation) async {
     if (_appliedOperations.contains(operation.opId)) return false;
     final changed = _applyOperationToMemory(operation);
+    if (changed) _rebuildUnitCache();
     await _persist();
     if (changed) _changes.add(state);
     return changed;

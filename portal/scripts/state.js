@@ -81,6 +81,47 @@
 
     const SEED_DATA = JSON.parse(JSON.stringify(defaultData));
 
+    /* ── REVISION COUNTER & MEMOIZATION CACHE ── */
+    let _stateRev = 1;
+    let _lastStateRef = null;
+    let _cachedDeriveKey = "";
+    let _cachedDeriveVal = null;
+    let _cachedTaxKey = "";
+    let _cachedTaxVal = null;
+    let _cachedCountsKey = "";
+    let _cachedCountsVal = null;
+
+    function bumpStateRev() {
+      _stateRev++;
+      _cachedDeriveKey = "";
+      _cachedTaxKey = "";
+      _cachedCountsKey = "";
+    }
+
+    function currentStateRevKey(extra = "") {
+      if (typeof state !== "undefined" && state !== _lastStateRef) {
+        _lastStateRef = state;
+        _stateRev++;
+      }
+      const ty = (typeof state !== "undefined" && state?.settings?.taxYear) || "";
+      const pFilter = (typeof state !== "undefined" && state?.settings?.transactionPeriodFilter) || "";
+      const txLen = (typeof state !== "undefined" && state?.transactions?.length) || 0;
+      const salLen = (typeof state !== "undefined" && state?.salary?.length) || 0;
+      const invLen = (typeof state !== "undefined" && state?.investments?.length) || 0;
+      const priv = isPrivacyMode() ? "1" : "0";
+      return `${_stateRev}:${ty}:${pFilter}:${txLen}:${salLen}:${invLen}:${priv}:${extra}`;
+    }
+
+    /* ── PRIVACY BLUR MODE ── */
+    function isPrivacyMode() {
+      try {
+        return typeof document !== "undefined" &&
+          document.documentElement?.getAttribute?.("data-privacy") === "1";
+      } catch (_) {
+        return false;
+      }
+    }
+
     /* ── CLOSE DRAWER ── */
     function closeDrawer() {
       if (q("drawer")) {
@@ -89,23 +130,37 @@
       }
     }
 
-    /* ── CHART DRAWING ENGINE (Chart.js-free inline SVG) ── */
+    /* ── CHART DRAWING ENGINE (Theme-Aware & View-Scoped) ── */
+    function chartColors() {
+      const isDark = typeof document !== "undefined" &&
+        document.documentElement?.getAttribute?.("data-theme") === "dark";
+      return {
+        text: isDark ? "#e8f0ec" : "#172620",
+        muted: isDark ? "#93a59e" : "#687872",
+        grid: isDark ? "rgba(147, 165, 158, 0.16)" : "rgba(107, 126, 107, 0.14)",
+        surface: isDark ? "#17201d" : "#ffffff",
+        green: isDark ? "#61c69c" : "#2d6a4f",
+        blue: isDark ? "#6fa8dc" : "#1d4c74",
+      };
+    }
+
     function drawCharts() {
-      drawNetChart();
-      drawAllocationChart();
-      drawCashChart();
-      drawTaxChart();
-      drawNetHistoryChart();
-      drawNetTrendChart();
-      drawForecastChart();
+      // Only invoke chart renderers whose canvas exists in the active DOM.
+      if (q("netChart")) drawNetChart();
+      if (q("allocationChart")) drawAllocationChart();
+      if (q("cashChart")) drawCashChart();
+      if (q("taxChart")) drawTaxChart();
+      if (q("netHistoryChart") && q("netChartHistoryWrap")?.style.display !== "none") drawNetHistoryChart();
+      if (q("netTrendChart")) drawNetTrendChart();
+      if (q("forecastChart")) drawForecastChart();
     }
 
     // ── Phase 1: shared chart primitives (de-duplicates drawNet/Cash/TaxChart) ──
     function setupHiDpiCanvas(canvas) {
       const container = canvas.parentElement;
-      const w = container.offsetWidth || 320;
-      const h = container.offsetHeight || 200;
-      const dpr = window.devicePixelRatio || 1;
+      const w = container?.offsetWidth || 320;
+      const h = container?.offsetHeight || 200;
+      const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       canvas.style.width = w + "px";
@@ -118,7 +173,8 @@
     }
 
     function drawBarGrid(ctx, w, h, max) {
-      ctx.strokeStyle = "rgba(107, 126, 107, 0.12)";
+      const palette = chartColors();
+      ctx.strokeStyle = palette.grid;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       const gridSteps = 3;
@@ -131,7 +187,7 @@
         ctx.moveTo(45, yGrid);
         ctx.lineTo(w - 15, yGrid);
         ctx.stroke();
-        ctx.fillStyle = "rgba(107, 126, 107, 0.75)";
+        ctx.fillStyle = palette.muted;
         ctx.font = "9px Segoe UI, sans-serif";
         ctx.textAlign = "right";
         ctx.fillText(shortNum((step / gridSteps) * max), 40, yGrid + 3);
@@ -142,6 +198,7 @@
 
     function barChart(canvas, bars) {
       const { ctx, w, h } = setupHiDpiCanvas(canvas);
+      const palette = chartColors();
       const max = Math.max(...bars.map(b => b.value)) || 1;
       const { chartBottom, chartHeight } = drawBarGrid(ctx, w, h, max);
       const plotLeft = 50, plotRight = w - 15;
@@ -162,11 +219,11 @@
           else ctx.rect(x, y, barW, bH);
           ctx.fill();
         }
-        ctx.fillStyle = "#6b7e6b";
+        ctx.fillStyle = palette.muted;
         ctx.textAlign = "center";
         ctx.font = "600 11px Segoe UI,sans-serif";
         ctx.fillText(bar.label, cx, h - 11);
-        ctx.fillStyle = "#1a2e1a";
+        ctx.fillStyle = palette.text;
         ctx.font = "bold 11px Segoe UI,sans-serif";
         ctx.fillText(shortNum(bar.value), cx, Math.max(y - 5, 20));
       });
@@ -174,11 +231,12 @@
 
     function lineChart(canvas, points, opts = {}) {
       const { ctx, w, h } = setupHiDpiCanvas(canvas);
-      const color = opts.color || "#1d4c74";
+      const palette = chartColors();
+      const color = opts.color || palette.blue;
       const fillArea = opts.fillArea !== false;
       const dashedFromIdx = opts.dashedFromIdx || null;
       if (!points.length) {
-        ctx.fillStyle = "#6b7e6b";
+        ctx.fillStyle = palette.muted;
         ctx.font = "12px Segoe UI, sans-serif";
         ctx.textAlign = "center";
         ctx.fillText("No history yet — click Backfill in Settings", w / 2, h / 2);
@@ -224,15 +282,13 @@
       });
       ctx.stroke();
       ctx.setLineDash([]);
-      // point markers (small, drawn for every point so history is legible)
       ctx.fillStyle = color;
       points.forEach((p, i) => {
         ctx.beginPath();
         ctx.arc(xFor(i), yFor(p.value), 2.5, 0, Math.PI * 2);
         ctx.fill();
       });
-      // x-axis date labels — concise (e.g. "Jan '24"), thinned to avoid overlap
-      ctx.fillStyle = "#6b7e6b";
+      ctx.fillStyle = palette.muted;
       ctx.font = "10px Segoe UI, sans-serif";
       ctx.textAlign = "center";
       const fmtDate = d => {
@@ -243,7 +299,6 @@
         return m + " '" + yr;
       };
       const xLabels = points.map((p, i) => ({ i, x: xFor(i), text: fmtDate(p.date) }));
-      // estimate ~36px per label; show first, last, and evenly-spaced ones in between
       const step = Math.max(1, Math.ceil(xLabels.length / Math.max(1, Math.floor(plotW / 38))));
       const shown = new Set();
       xLabels.forEach(l => { if (l.i % step === 0 || l.i === xLabels.length - 1) shown.add(l.i); });
@@ -255,13 +310,12 @@
       ctx.beginPath();
       ctx.arc(xFor(points.length - 1), yFor(last.value), 3, 0, Math.PI * 2);
       ctx.fill();
-      ctx.fillStyle = "#1a2e1a";
+      ctx.fillStyle = palette.text;
       ctx.font = "bold 11px Segoe UI,sans-serif";
       ctx.textAlign = "right";
       ctx.fillText(shortNum(last.value), plotRight, Math.max(yFor(last.value) - 6, 20));
     }
 
-    // History/trend draw functions (Task 6/7 wire the canvases + state; stubs safe to call pre-UI)
     let netHistoryRange = "12";
     function drawNetHistoryChart() {
       const el = q("netHistoryChart");
@@ -275,13 +329,13 @@
         const cutoffStr = cutoff.toISOString().slice(0, 10);
         snaps = all.filter(s => s.date >= cutoffStr);
       }
-      lineChart(el, snaps.map(s => ({ date: s.date, value: s.netWorth })), { color: "#1d4c74", fillArea: true });
+      lineChart(el, snaps.map(s => ({ date: s.date, value: s.netWorth })), { fillArea: true });
     }
     function drawNetTrendChart() {
       const el = q("netTrendChart");
       if (!el) return;
       const snaps = (state.netWorthSnapshots || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));
-      lineChart(el, snaps.map(s => ({ date: s.date, value: s.netWorth })), { color: "#1d4c74", fillArea: true });
+      lineChart(el, snaps.map(s => ({ date: s.date, value: s.netWorth })), { fillArea: true });
     }
 
     function drawNetChart() {
@@ -295,23 +349,24 @@
       ]);
     }
 
-               function drawAllocationChart() {
+    function drawAllocationChart() {
       const el = q("allocationChart");
       if (!el) return;
 
+      const palette = chartColors();
       const canvas = el;
       const ctx = canvas.getContext("2d");
       const container = canvas.parentElement;
-      const width = container.offsetWidth || 600;
-      const height = 240;  // donut only — breakdown lives in the HTML legend beside i
+      const width = container?.offsetWidth || 280;
+      const height = 240;
 
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
       canvas.width = width * dpr;
       canvas.height = height * dpr;
       canvas.style.width = width + "px";
       canvas.style.height = height + "px";
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.scale(dpr, dpr);
-
       ctx.clearRect(0, 0, width, height);
 
       const investments = state.investments || [];
@@ -319,8 +374,6 @@
       const _allocPeriod = taxPeriod();
       const _allocEnd = _allocPeriod.end;
 
-      // Only include investments that were active during the selected period
-      // (started by period end AND not yet withdrawn/matured by period end)
       const activeInvestments = investments.filter(i => {
         if (i.startDate && i.startDate > _allocEnd) return false;
         const isClosedBeforePeriodEnd =
@@ -331,14 +384,14 @@
 
       activeInvestments.forEach(i => {
         const t = i.type || "other";
-        typeMap[t] = (typeMap[t] || 0) + num(i.currentValue || i.principal);
+        typeMap[t] = (typeMap[t] || 0) + num(accruedValue(i, _allocEnd));
       });
 
       const entries = Object.entries(typeMap);
       const total = entries.reduce((s, [,v]) => s + v, 0) || 1;
 
       if (!entries.length) {
-        ctx.fillStyle = "#6b7e6b";
+        ctx.fillStyle = palette.muted;
         ctx.textAlign = "center";
         ctx.font = "14px Segoe UI, sans-serif";
         ctx.fillText("No active investment data", width/2, height/2);
@@ -349,11 +402,11 @@
 
       const cx = width / 2;
       const cy = height / 2;
-      const outerRadius = Math.min(width, height) / 2 - 40;
-      const innerRadius = outerRadius * 0.55;
+      const outerRadius = Math.min(width, height) / 2 - 36;
+      const innerRadius = outerRadius * 0.58;
 
       let angle = -Math.PI / 2;
-      entries.forEach(([label, val], i) => {
+      entries.forEach(([, val], i) => {
         const slice = (val / total) * Math.PI * 2;
         ctx.beginPath();
         ctx.arc(cx, cy, outerRadius, angle, angle + slice);
@@ -361,26 +414,27 @@
         ctx.closePath();
         ctx.fillStyle = colors[i % colors.length];
         ctx.fill();
-        ctx.strokeStyle = "#fff";
+        ctx.strokeStyle = palette.surface;
         ctx.lineWidth = 2;
         ctx.stroke();
         angle += slice;
       });
 
-      ctx.fillStyle = "#1a2e1a";
+      ctx.fillStyle = palette.muted;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = "bold 14px Segoe UI, sans-serif";
+      ctx.font = "600 12px Segoe UI, sans-serif";
       ctx.fillText("Total", cx, cy - 10);
-      ctx.font = "bold 16px Segoe UI, sans-serif";
-      ctx.fillStyle = "#2d6a4f";
-      ctx.fillText(money(total), cx, cy + 16);
+      ctx.font = "bold 14px Segoe UI, sans-serif";
+      ctx.fillStyle = palette.green;
+      ctx.fillText(shortNum(total), cx, cy + 12);
     }
+
     function drawCashChart() {
       const el = q("cashChart");
       if (!el) return;
+      const palette = chartColors();
       const _cashPeriod = taxPeriod();
-      // Scope to selected period only, show up to 12 months within i
       const txs = (state.transactions || []).filter(t =>
         t.date && (t.type === "income" || t.type === "expense") &&
         withinPeriod(t.date, _cashPeriod)
@@ -396,14 +450,14 @@
 
       const { ctx, w, h } = setupHiDpiCanvas(el);
       if (!months.length) {
-        ctx.fillStyle="#6b7e6b"; ctx.textAlign="center"; ctx.font="13px Segoe UI,sans-serif";
+        ctx.fillStyle = palette.muted; ctx.textAlign = "center"; ctx.font = "13px Segoe UI,sans-serif";
         ctx.fillText("No transaction data", w/2, h/2); return;
       }
 
       const maxVal = Math.max(...months.flatMap(m => [byMonth[m].income, byMonth[m].expense])) || 1;
       const { chartBottom, chartHeight } = drawBarGrid(ctx, w, h, maxVal);
 
-      const barW = Math.floor((w - 70) / (months.length * 3));
+      const barW = Math.max(4, Math.floor((w - 70) / (months.length * 3)));
       const padL = 50;
 
       ctx.font = "10px Segoe UI,sans-serif";
@@ -426,7 +480,7 @@
         drawBar(x, incH, "#2d6a4f", "#52b788");
         drawBar(x + barW + 3, expH, "#c0392b", "#ff6b6b");
 
-        ctx.fillStyle = "#6b7e6b";
+        ctx.fillStyle = palette.muted;
         ctx.textAlign = "center";
         const parts = mo.split("-");
         const monthLabel = parts[1] === "01" ? parts[0].slice(2) + "/" + parts[1] : parts[1];
@@ -438,7 +492,7 @@
       ctx.beginPath();
       ctx.roundRect ? ctx.roundRect(padL, 10, 10, 10, 2) : ctx.rect(padL, 10, 10, 10);
       ctx.fill();
-      ctx.fillStyle = "#1a2e1a";
+      ctx.fillStyle = palette.text;
       ctx.textAlign = "left";
       ctx.font = "600 11px Segoe UI,sans-serif";
       ctx.fillText("Income", padL + 14, 18);
@@ -446,7 +500,7 @@
       ctx.beginPath();
       ctx.roundRect ? ctx.roundRect(padL + 75, 10, 10, 10, 2) : ctx.rect(padL + 75, 10, 10, 10);
       ctx.fill();
-      ctx.fillStyle = "#1a2e1a";
+      ctx.fillStyle = palette.text;
       ctx.fillText("Expense", padL + 89, 18);
     }
 
@@ -462,6 +516,7 @@
     }
 
     function shortNum(n) {
+      if (isPrivacyMode()) return "•••";
       n = Number(n || 0);
       if (n >= 1e7) return (n/1e7).toFixed(1) + "Cr";
       if (n >= 1e5) return (n/1e5).toFixed(1) + "L";
@@ -476,12 +531,9 @@
     const today = new Date().toISOString().slice(0, 10);
 
     // ── Phase 1: net-worth snapshot engine ──
-    // captureSnapshot: compute net worth as-of today (or a given date) and append,
-    // deduped by date (one snapshot per date, max). Writes to state + marks dirty.
     function captureSnapshot(asOf) {
       const date = asOf || today;
       state.netWorthSnapshots = state.netWorthSnapshots || [];
-      // dedupe: replace if a snapshot for this date exists
       const existingIdx = state.netWorthSnapshots.findIndex(s => s.date === date);
       const snap = { id: id(), ...netWorthAsOf(date) };
       if (existingIdx >= 0) {
@@ -493,21 +545,14 @@
       return snap;
     }
 
-    // maybeCaptureDailySnapshot: called on app open. If no snapshot exists for today,
-    // capture one. Idempotent and cheap. Does NOT backfill past days.
     function maybeCaptureDailySnapshot() {
       state.netWorthSnapshots = state.netWorthSnapshots || [];
       const hasToday = state.netWorthSnapshots.some(s => s.date === today);
       if (!hasToday) captureSnapshot(today);
     }
 
-    // runBackfill: walk month-ends from earliest tx/salary/investment date to today,
-    // synthesizing a snapshot at each missing month-end. Uses netWorthAsOf (which
-    // reconstructs balances from transactions), so it's accurate even for periods
-    // before daily snapshots began.
     function runBackfill() {
       state.netWorthSnapshots = state.netWorthSnapshots || [];
-      // Find the earliest relevant date across all dated entities.
       const allDates = [];
       for (const t of (state.transactions || [])) if (t.date) allDates.push(t.date);
       for (const s of (state.salary || [])) if (s.date) allDates.push(s.date);
@@ -516,14 +561,12 @@
       for (const l of (state.liabilities || [])) if (l.openedDate) allDates.push(l.openedDate);
       if (!allDates.length) return { added: 0 };
       allDates.sort();
-      const startStr = allDates[0].slice(0, 7) + "-01"; // first day of earliest month
+      const startStr = allDates[0].slice(0, 7) + "-01";
 
-      // Iterate month-ends from start to today.
       let added = 0;
       let cursor = new Date(startStr + "T00:00:00");
       const endCursor = new Date(today + "T00:00:00");
       while (cursor <= endCursor) {
-        // last day of cursor's month
         const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
         const dateStr = monthEnd.toISOString().slice(0, 10);
         const exists = state.netWorthSnapshots.some(s => s.date === dateStr);
@@ -642,12 +685,9 @@
     }
 
     function migrateState(data) {
-      // ── Phase 1: ensure top-level arrays exist (auto-migration for older backups) ──
       if (!Array.isArray(data.netWorthSnapshots)) data.netWorthSnapshots = [];
-      // ── Phase 2/3: recurring rules + budgets (default empty; old data loads unchanged) ──
       if (!Array.isArray(data.recurringRules)) data.recurringRules = [];
       if (!Array.isArray(data.budgets)) data.budgets = [];
-      // ── Phase 4: forecast assumptions (defaults set, never overwritten if present) ──
       if (!data.forecastAssumptions || typeof data.forecastAssumptions !== "object") data.forecastAssumptions = {};
       data.forecastAssumptions = Object.assign({
         monthsAhead: 60, monthlySavingsOverride: null, annualReturnPct: 8,
@@ -687,7 +727,6 @@
           rebateParams: safeClone(data.settings.rebateParams)
         };
       }
-      // Ensure system categories always exist (they power auto-generated transactions)
       const SYSTEM_CATS = [
         { id: "sys_cat_reimbursement", type: "income", name: "Income/Reimbursement", _system: true },
         { id: "sys_cat_inv_maturity", type: "transfer", name: "Investment maturity/withdrawal", _system: true },
@@ -724,19 +763,12 @@
       normalizeInvestmentFunding(data);
       syncInvestmentFundingRecords(data);
 
-      // ── PF LEDGER AGGREGATION MIGRATION ──
-      // Collapse any legacy per-month salary PF entries (entries carrying a
-      // sourceId) into one aggregate entry per financial year. Safe to re-run:
-      // entries already in aggregate form are regenerated from salary data, and
-      // manual entries (interest, opening balances) are preserved.
       try {
         const salaryList = data.salary || [];
         (data.investments || []).forEach(inv => {
           if (inv.type !== "provident_fund") return;
           const hasLegacy = Array.isArray(inv.pfLedger) && inv.pfLedger.some(e => e.sourceId && e.sourceType !== 'salaryAggregate');
           if (hasLegacy || !Array.isArray(inv.pfLedger)) {
-            // Inline rebuild using the same logic as rebuildSalaryPfAggregates,
-            // but operating on the raw data object (state may not be set yet).
             const manual = (inv.pfLedger || []).filter(e => e.sourceType !== 'salaryAggregate' && !e.sourceId);
             const byYear = {};
             salaryList.forEach(s => {
@@ -760,7 +792,7 @@
                 currentValue: info.total,
                 taxableProfit: 0,
                 taxDeducted: 0,
-                notes: `Aggregated employee + employer PF from salary records for AY ${fy}.
+                notes: `Aggregated employee + employer PF from salary records for AY ${fy}.`
               };
             });
             inv.pfLedger = [...manual, ...aggregates];
@@ -773,17 +805,10 @@
         });
       } catch (e) { console.error("PF aggregate migration failed", e); }
 
-      // ── PROFIT TAX TREATMENT MIGRATION ──
-      // Every investment gets profitTaxMethod ('final' | 'slab'). Defaults are
-      // type-aware: savings_certificate & provident_fund → 'final' (source tax
-      // IS the final tax); everything else (dps, fdr, mutual_fund, other) →
-      // 'slab' (profit joins the slab base, source tax is a credit). The user
-      // can flip either option on any investment at withdrawal. Idempotent.
       (data.investments || []).forEach(inv => {
         if (!inv.profitTaxMethod) inv.profitTaxMethod = defaultProfitTaxMethod(inv.type);
       });
 
-      // ── PHASE 1.2: Tag special income categories with isIncomeSourceOfTruth ──
       const SALARY_CAT_NAMES_P12 = ["Salary"];
       const INV_CAT_NAMES_P12 = ["PF/investment interest","DPS/FDR interest","Savings certificate profit","Mutual fund dividend"];
       (data.categories || []).forEach(c => {
@@ -793,10 +818,8 @@
         }
       });
 
-      // ── PHASE 2.1: Link existing unlinked salary transactions to their salary rows ──
       syncSalaryTransactionsFromMigration(data);
 
-      // ── PHASE 3.1: Deactivate standalone Expenses module (merged into Transactions type filter) ──
       data.settings.activeModules.expenses = false;
       if (data.settings.transactionTypeFilter === undefined) data.settings.transactionTypeFilter = "";
       if (data.settings.transactionPeriodFilter === undefined) data.settings.transactionPeriodFilter = "current";
@@ -804,11 +827,6 @@
       return data;
     }
 
-    // Type-aware default for how an investment's profit is taxed after
-    // withdrawal/maturity. Savings certificates & provident funds use source
-    // tax as the FINAL tax; DPS/FDR/mutual funds/other roll the profit into
-    // the ordinary slab base (source tax becomes a credit). Either value is
-    // user-overridable per investment at any time.
     function defaultProfitTaxMethod(type) {
       return (type === "savings_certificate" || type === "provident_fund") ? "final" : "slab";
     }
@@ -861,16 +879,9 @@
         } else if (tx.affectsAccount === undefined) {
           tx.affectsAccount = true;
         }
-        // ── Category rename migration ──
-        // The "Internal Transfer" category used to be overloaded by the asse
-        // reclassification machine and the opening-balance snapshot memo. Those now
-        // have their own categories, and "Internal Transfer" is reserved for real
-        // account-to-account cash transfers. Re-tag legacy records accordingly so
-        // filters and grouping stay consistent after the split.
         if (tx.category === "Internal Transfer") {
           if (tx.generatedKind === "assetTransfer") tx.category = "Asset reclassification";
           else if (tx.generatedKind === "openingSnapshot" || /^Opening balance snapshot/.test(tx.name || "")) tx.category = "Opening balance memo";
-          // Anything else keeps "Internal Transfer" (now meaning a real A→B transfer).
         }
       });
     }
@@ -951,11 +962,6 @@
         else data.transactions.push(tx);
         keepIds.add(tx.id);
       });
-      // Preserve historical funding outflows for closed investments. Previously this line deleted
-      // any investmentFunding tx whose source investment was withdrawn/matured (not in keepIds),
-      // which erased the real cash outflow from account history and inflated account balances on
-      // reload. The reconciliation bridge now handles same-period closed funding explicitly, so we
-      // no longer strip funding records here — they remain a true part of cash history.
       data.transactions = data.transactions.filter(t => t.generatedKind !== "investmentFunding" || keepIds.has(t.id) || t.sourceId && (data.investments || []).some(inv => inv.id === t.sourceId && (inv.status === "withdrawn" || inv.status === "matured")));
     }
 
@@ -1006,14 +1012,12 @@
 
     function load() {
       try {
-        // Parse embedded state (the JSON baked into the HTML file itself)
         const embeddedEl = q("embeddedState");
         let embeddedData = null;
         if (embeddedEl && embeddedEl.textContent.trim() && embeddedEl.textContent.trim() !== '{}') {
           try { embeddedData = JSON.parse(embeddedEl.textContent); } catch(e) { embeddedData = null; }
         }
 
-        // Parse localStorage state (live edits written by save())
         const stored = localStorage.getItem(storeKey);
         let storedData = null;
         if (stored) {
@@ -1026,32 +1030,18 @@
         const embeddedHasRecords = hasRecords(embeddedData);
         const storedHasRecords = hasRecords(storedData);
 
-        // ── PORTABILITY MODEL ──
-        // On file:// the browser CANNOT silently overwrite this file, so save()
-        // writes every edit to localStorage. To keep those edits alive across
-        // refresh/reopen, we pick whichever source is NEWER by lastSavedAt.
-        // This is the fix for "my transfer disappears on reload": your live
-        // edits (in localStorage) now win over the stale embedded copy.
-        // First-run (no records anywhere) seeds localStorage + returns seed.
         if (embeddedHasRecords && storedHasRecords) {
           const eTime = Date.parse(embeddedData.settings?.lastSavedAt || 0) || 0;
           const sTime = Date.parse(storedData.settings?.lastSavedAt || 0) || 0;
           if (sTime >= eTime) {
-            console.info('[Finance OS] Loaded from localStorage (newer than file).');
             return mergeDefaults(storedData);
           }
-          console.info('[Finance OS] Loaded from embedded file (newer than localStorage).');
           return mergeDefaults(embeddedData);
         }
         if (storedHasRecords) {
-          console.info('[Finance OS] Loaded from localStorage.');
           return mergeDefaults(storedData);
         }
         if (embeddedHasRecords) {
-          console.info('[Finance OS] Loaded from embedded file.');
-          // Mirror the embedded data into localStorage so future edits have a
-          // live baseline to compare against — otherwise the timestamp logic
-          // above can't detect "edited since file was opened".
           try { localStorage.setItem(storeKey, JSON.stringify(embeddedData)); } catch(e) {}
           return mergeDefaults(embeddedData);
         }
@@ -1066,18 +1056,11 @@
     }
 
     let _dirty = false;
-    // ── File System Access API plumbing ──
-    // Holds the handle to finance_os_portable.html on disk once granted, so every
-    // edit can write silently in place (no download prompt). Falls back to auto-
-    // download when the API is unavailable (Firefox/Safari).
     let _fileHandle = null;
     let _fileWriteQueued = false;
-    const _fileSupport = "showSaveFilePicker" in window;
+    const _fileSupport = typeof window !== "undefined" && "showSaveFilePicker" in window;
     const _idbDb = "_finance_os";
     const _idbStore = "handles";
-    // Persist the file handle in IndexedDB so a granted handle survives reloads
-    // (the API only re-grants per session otherwise). Re-permission is still
-    // required on first write after a reload, but no re-pick of the file.
     function idbGetHandle() {
       return new Promise(resolve => {
         if (!_fileSupport || !window.indexedDB) return resolve(null);
@@ -1110,64 +1093,44 @@
       } catch (e) { /* non-fatal */ }
     }
 
-    // ── SAVE MODEL (file:// reality) ──
-    // The browser CANNOT silently overwrite this file when it's opened from
-    // disk (file:// is not a secure context, so the File System Access API is
-    // blocked). Therefore:
-    //   • localStorage is the PRIMARY, GUARANTEED store. Every edit lands here
-    //     instantly and survives refresh/reopen. load() picks the newer of
-    //     localStorage-vs-embedded, so your edits are never lost.
-    //   • If the File System Access picker happens to work (rare on file://,
-    //     works when served over localhost), we ALSO write in place as a bonus.
-    //     Nothing depends on it succeeding.
-    //   • "Save File" (the button) downloads a fresh portable copy with your
-    //     data baked in — that's the artifact you copy around. One download,
-    //     you replace the old file. No spam, no background downloads.
     function save() {
       try {
+        bumpStateRev();
         state.settings = state.settings || {};
         state.settings.lastSavedAt = new Date().toISOString();
-        localStorage.setItem(storeKey, JSON.stringify(state)); // guaranteed
-        _dirty = true; updateSaveBtn();
-        queueFileWrite(); // bonus in-place attempt only; safe to fail
+        localStorage.setItem(storeKey, JSON.stringify(state));
+        const isNative = typeof window !== "undefined" && Boolean(window.flutter_inappwebview);
+        _dirty = !isNative;
+        updateSaveBtn();
+        if (!isNative) queueFileWrite();
       } catch (err) { console.error("Save failed", err); }
     }
-    // Persist pure view/UI state (e.g. which sub-tab is open) to localStorage so
-    // it survives reloads, WITHOUT marking the file dirty. Only real data edits
-    // should turn the Save button orange.
+
     function persistViewOnly() {
       try {
         state.settings = state.settings || {};
         localStorage.setItem(storeKey, JSON.stringify(state));
       } catch (err) { console.error("Persist failed", err); }
     }
-    // Debounce: collapse rapid saves (e.g. typing in a form) into one write.
+
     function queueFileWrite() {
       if (_fileWriteQueued) return;
       _fileWriteQueued = true;
       setTimeout(() => { _fileWriteQueued = false; persistToFile(); }, 400);
     }
-    // Write current state into the linked file handle (if one is set).
-    // Called automatically on every save() once the user has linked a file.
-    // Silently skips if no handle or permission is not already granted.
-    // The Overwrite button (a user-gesture) handles re-granting permission.
     async function persistToFile() {
       if (!_fileHandle) return;
       try {
         const perm = await _fileHandle.queryPermission({ mode: 'readwrite' });
-        if (perm !== 'granted') return; // keep dirty; Overwrite button re-grants
+        if (perm !== 'granted') return;
         const writable = await _fileHandle.createWritable();
         await writable.write(getCleanPortableHtml());
         await writable.close();
         _dirty = false; updateSaveBtn(); updateOverwriteBtn();
       } catch (err) {
         console.warn('Silent in-place write failed:', err);
-        // Don't nuke the handle on transient errors.
       }
     }
-    // Pick the file once via the picker (only works over localhost/https). Used
-    // by the Save button as the "try silent in-place" path; on file:// it will
-    // throw and we fall back to download. Never throws out to the caller.
     async function chooseFileHandle() {
       try {
         _fileHandle = await window.showSaveFilePicker({
@@ -1177,7 +1140,6 @@
         idbPutHandle(_fileHandle);
         await persistToFile();
       } catch (err) {
-        // On file:// this throws SecurityError → fall back to a download.
         _fileHandle = null;
         downloadPortableHtml();
         _dirty = false; updateSaveBtn();
@@ -1187,7 +1149,8 @@
     function updateSaveBtn() {
       const btn = q("savePortableBtn");
       if (!btn) return;
-      btn.classList.toggle("dirty", _dirty);
+      const isNative = typeof window !== "undefined" && Boolean(window.flutter_inappwebview);
+      btn.classList.toggle("dirty", _dirty && !isNative);
       btn.textContent = "Export portable HTML";
     }
     function updateOverwriteBtn() {
@@ -1205,8 +1168,6 @@
     }
     async function overwriteFile() {
       if (!_fileSupport) {
-        // Fallback for Firefox/Safari: download with exact same filename (no timestamp).
-        // The browser overwrites if the file already exists in Downloads, saving the rename step.
         const cleanHtml = getCleanPortableHtml();
         const blob = new Blob([cleanHtml], { type: "text/html" });
         const a = document.createElement("a");
@@ -1218,14 +1179,12 @@
         URL.revokeObjectURL(a.href);
         return;
       }
-      // Re-grant permission on an existing handle (requires user gesture, which this click is).
       if (_fileHandle) {
         try {
           const perm = await _fileHandle.requestPermission({ mode: "readwrite" });
           if (perm !== "granted") { _fileHandle = null; idbClearHandle(); }
         } catch (e) { _fileHandle = null; idbClearHandle(); }
       }
-      // No handle yet (first time, or lost) — show the file picker.
       if (!_fileHandle) {
         try {
           _fileHandle = await window.showSaveFilePicker({
@@ -1235,13 +1194,11 @@
           idbPutHandle(_fileHandle);
         } catch (e) {
           if (e.name !== "AbortError") {
-            // Picker failed (e.g. file:// SecurityError) — fall back to timestamped download.
             downloadPortableHtml();
           }
           return;
         }
       }
-      // Write to the (now-confirmed) handle.
       try {
         const writable = await _fileHandle.createWritable();
         await writable.write(getCleanPortableHtml());
@@ -1251,11 +1208,14 @@
       } catch (err) {
         console.warn("Overwrite write failed:", err);
         _fileHandle = null; idbClearHandle(); updateOverwriteBtn();
-        alert("Could not write to the file. The link has been reset — try again to re-link.");
+        if (typeof showUndoToast === "function") showUndoToast("Could not write to linked file — link reset");
       }
     }
 
-    function money(n) { return bdt.format(Number(n || 0)); }
+    function money(n) {
+      if (isPrivacyMode()) return "৳ ••••••";
+      return bdt.format(Number(n || 0));
+    }
     function num(n) { return Number(n || 0); }
 
     /* ── DATE COMPARISON ENGINE (SAFE FORMAT ALIGNMENT) ── */
@@ -1320,9 +1280,6 @@
     }
     function investmentTaxEntries(period = taxPeriod()) {
       return (state?.investments || []).flatMap(inv => {
-        // Profit tax treatment is inherited from the parent investment so a
-        // whole PF fund (or any instrument) has one consistent treatment. PF
-        // ledger entries share the parent's profitTaxMethod.
         const method = inv.profitTaxMethod || defaultProfitTaxMethod(inv.type);
         if (inv.type === "provident_fund" && Array.isArray(inv.pfLedger)) {
           return inv.pfLedger.map(entry => ({
@@ -1355,11 +1312,11 @@
       }).filter(entry => withinPeriod(entry.date, period));
     }
 
-        function yearTaxSummary(period = taxPeriod()) {
+    function yearTaxSummary(period = taxPeriod()) {
+      const cacheKey = currentStateRevKey(`${period.label}:${period.start}:${period.end}`);
+      if (_cachedTaxKey === cacheKey && _cachedTaxVal) return _cachedTaxVal;
+
       const salaryRows = (state?.salary || []).filter(s => withinPeriod(s.date, period));
-      // Salary income is sourced from state.salary (gross via salaryRows below).
-      // Exclude categories tagged isIncomeSourceOfTruth (salary-generated and investment-income).
-      // Also exclude auto-generated salary net transactions to prevent double-counting.
       const specialIncomeCatNames = new Set(
         (state?.categories || []).filter(c => c.isIncomeSourceOfTruth).map(c => c.name)
       );
@@ -1372,22 +1329,16 @@
         !specialIncomeCatNames.has(t.category)
       );
 
-      // --- FIX: Separate investment entries for Tax vs Rebate Base ---
       const allInvestmentEntries = investmentTaxEntries(period);
-
-      // 1. Investment entries for tax reporting (includes gains from previous year investments if profit is in this year)
       const investmentEntries = allInvestmentEntries;
 
-      // 2. Rebate Base: Only include PRINCIPAL of investments STARTED within this tax year
       const rebateBase = (state?.investments || []).reduce((sum, inv) => {
-        // If provident fund, sum principal of ledger entries started within period
         if (inv.type === "provident_fund" && Array.isArray(inv.pfLedger)) {
           const periodPrincipal = inv.pfLedger
             .filter(entry => withinPeriod(entry.date, period))
             .reduce((s, e) => s + num(e.principal), 0);
           return sum + periodPrincipal;
         }
-        // For all other investments, include principal ONLY if startDate is within period
         if (withinPeriod(inv.startDate, period)) {
           return sum + num(inv.principal);
         }
@@ -1396,10 +1347,6 @@
 
       const manualTaxPayments = (state?.taxPayments || []).filter(p => taxPaymentBelongsToPeriod(p, period));
 
-      // Split investment entries by profit tax treatment. 'final' = source tax
-      // IS the tax (savings certificates, PF). 'slab' = profit joins the
-      // ordinary slab base and source tax is a prepayment credit (DPS/FDR/
-      // mutual funds). Either method is user-overridable per investment.
       const finalTaxEntries = investmentEntries.filter(i => i.profitTaxMethod !== "slab");
       const slabTaxEntries = investmentEntries.filter(i => i.profitTaxMethod === "slab");
 
@@ -1408,31 +1355,20 @@
       const finalSourceTax = finalTaxEntries.reduce((sum, i) => sum + num(i.taxDeducted), 0);
       const slabSourceTaxCredit = slabTaxEntries.reduce((sum, i) => sum + num(i.taxDeducted), 0);
 
-      // Slab-taxed investment profit becomes part of ordinary gross income so
-      // it is taxed by the progressive slabs (standard deduction still applies).
       const ordinaryIncome = salaryRows.reduce((sum, s) => sum + num(s.gross) + num(s.pfEmployer), 0) +
         ordinaryTransactions.reduce((sum, t) => sum + num(t.taxableAmount ?? t.amount), 0) +
         slabInvestmentProfit;
-      // Grand totals kept for backward-compatible consumers (history table etc.)
       const investmentIncome = finalTaxIncome + slabInvestmentProfit;
 
       const salaryTds = salaryRows.reduce((sum, row) => sum + num(row.tds), 0);
       const manualTaxPaid = manualTaxPayments.reduce((sum, p) => sum + num(p.amount), 0);
-      // investmentSourceTax kept as the grand-total source tax across both
-      // buckets (used by older UI consumers); split figures below carry the
-      // precise final-vs-credit breakdown.
       const investmentSourceTax = finalSourceTax + slabSourceTaxCredit;
 
       const slabTax = bdTaxEstimate(ordinaryIncome, rebateBase, period.label);
-      // totalTax: slab tax (which now includes slab-taxed invest profit) PLUS
-      // the final source tax (the standalone tax on final-taxed instruments).
       const totalTax = slabTax + finalSourceTax;
-      // taxPaid: salary TDS + manual payments + ALL investment source tax.
-      // For final instruments the source tax is part of what you owe; for slab
-      // instruments it's a prepayment credit toward the slab tax on that profit.
       const taxPaid = salaryTds + manualTaxPaid + investmentSourceTax;
 
-      return {
+      const result = {
         period,
         salaryRows,
         ordinaryTransactions,
@@ -1440,7 +1376,6 @@
         manualTaxPayments,
         ordinaryIncome,
         investmentIncome,
-        // Split investment buckets for transparent tax reporting
         finalTaxEntries,
         slabTaxEntries,
         finalTaxIncome,
@@ -1450,13 +1385,16 @@
         salaryTds,
         manualTaxPaid,
         investmentSourceTax,
-        rebateBase, // ✅ Now correctly excludes previous year Sanchaypatra principal
+        rebateBase,
         slabTax,
         totalTax,
         taxPaid,
         taxDue: Math.max(0, totalTax - taxPaid),
         refundable: Math.max(0, taxPaid - totalTax)
       };
+      _cachedTaxKey = cacheKey;
+      _cachedTaxVal = result;
+      return result;
     }
 
     function taxHistoryPeriods() {
@@ -1480,10 +1418,8 @@
     function q(id) { return document.getElementById(id); }
 
     /* ── VIEW NAVIGATION & MANAGEMENT ── */
-    /* ── Period badge dropdown: build + wire options, refresh active highlight ── */
     let taxYearMenuWired = false;
     function parseTaxYearOptionsHtml(html) {
-      // Extract value/label pairs from the <option> markup built by taxYearOptionsHtml()
       const out = [];
       const re = /<option\s+value="([^"]*)"[^>]*>([^<]*)<\/option>/g;
       let m;
@@ -1498,7 +1434,7 @@
       menu.innerHTML =
         `<div class="ty-head">Select Tax Year</div>` +
         options.map(o =>
-          `<button type="button" data-ty="${o.value}" class="${o.value === current ? "active" : ""}"><span>${o.label || o.value}</span><span class="ty-mark">✓</span></button>
+          `<button type="button" data-ty="${o.value}" class="${o.value === current ? "active" : ""}"><span>${o.label || o.value}</span><span class="ty-mark">✓</span></button>`
         ).join("");
 
       menu.querySelectorAll("button[data-ty]").forEach(btn => {
@@ -1511,10 +1447,10 @@
           state.settings.incomeYearEnd = dates.end;
           menu.classList.remove("open");
           save();
-          // Keep Settings view dropdown in sync if it's open
           if (q("taxYearSetting")) q("taxYearSetting").value = val;
           if (q("periodBadgeLabel")) q("periodBadgeLabel").textContent = "AY " + val;
           renderTaxYearMenuActive();
+          renderNav();
           render();
         };
       });
@@ -1528,7 +1464,6 @@
         btn.classList.toggle("active", btn.dataset.ty === current);
       });
     }
-    // Close the dropdown on outside click
     document.addEventListener("click", (e) => {
       const menu = q("taxYearMenu");
       const wrap = q("periodBadgeWrap");
@@ -1536,23 +1471,26 @@
         menu.classList.remove("open");
       }
     });
-    // Close on Escape
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") { const m = q("taxYearMenu"); if (m) m.classList.remove("open"); }
     });
 
     function countFor(view) {
-      const p = taxPeriod();
-      const map = {
-        transactions: (state?.transactions || []).filter(t => transactionMatchesPeriod(t)).length,
-        salary: (state?.salary || []).filter(s => withinPeriod(s.date, p)).length,
-        expenses: (state?.transactions || []).filter(t => t.type === "expense" && withinPeriod(t.date, p)).length,
-        assets: (state?.assets || []).filter(a => !a.acquiredDate || a.acquiredDate <= p.end).length,
-        liabilities: (state?.liabilities || []).filter(l => !l.openedDate || l.openedDate <= p.end).length,
-        investments: (state?.investments || []).filter(i => (!i.startDate || i.startDate <= p.end) && !((i.status === "withdrawn" || i.status === "matured") && i.withdrawalDate && i.withdrawalDate <= p.end)).length,
-        tax: (state?.taxPayments || []).filter(t => taxPaymentBelongsToPeriod(t, p)).length,
-        planning: (state?.goals || []).length,
-        budgets: (state?.budgets || []).filter(b => !b.archivedAt).length
-      };
-      return map[view] ? String(map[view]) : "";
+      const cacheKey = currentStateRevKey();
+      if (_cachedCountsKey !== cacheKey || !_cachedCountsVal) {
+        const p = taxPeriod();
+        _cachedCountsVal = {
+          transactions: (state?.transactions || []).filter(t => transactionMatchesPeriod(t)).length,
+          salary: (state?.salary || []).filter(s => withinPeriod(s.date, p)).length,
+          expenses: (state?.transactions || []).filter(t => t.type === "expense" && withinPeriod(t.date, p)).length,
+          assets: (state?.assets || []).filter(a => !a.acquiredDate || a.acquiredDate <= p.end).length,
+          liabilities: (state?.liabilities || []).filter(l => !l.openedDate || l.openedDate <= p.end).length,
+          investments: (state?.investments || []).filter(i => (!i.startDate || i.startDate <= p.end) && !((i.status === "withdrawn" || i.status === "matured") && i.withdrawalDate && i.withdrawalDate <= p.end)).length,
+          tax: (state?.taxPayments || []).filter(t => taxPaymentBelongsToPeriod(t, p)).length,
+          planning: (state?.goals || []).length,
+          budgets: (state?.budgets || []).filter(b => !b.archivedAt).length
+        };
+        _cachedCountsKey = cacheKey;
+      }
+      return _cachedCountsVal[view] ? String(_cachedCountsVal[view]) : "";
     }

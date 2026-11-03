@@ -29,12 +29,22 @@ class FolderSyncCoordinator {
   final FinanceRepository repository;
   final _status = StreamController<FolderSyncStatus>.broadcast();
   Timer? _timer;
+  Timer? _watchDebounce;
+  StreamSubscription<Object?>? _watchSubscription;
   SyncFolder? _folder;
   bool _running = false;
   String? _pendingApprovalHash;
   FolderSyncStatus _currentStatus = const FolderSyncStatus(
     phase: FolderSyncPhase.disabled,
   );
+
+  // In-memory caches of verified immutable artifacts to avoid re-reading and
+  // re-hashing unchanged files on every sync tick.
+  final Map<String, FinanceSnapshot> _verifiedSnapshots = {};
+  final Map<String, FinanceOperation> _verifiedOperations = {};
+  final Map<String, FinanceOperation> _cachedLocalOperations = {};
+  String? _lastSnapshotStateHash;
+  String? _lastRemoteSignature;
 
   static const _maximumSnapshotBytes = 10 * 1024 * 1024;
   static const _maximumOperationBytes = 2 * 1024 * 1024;
@@ -45,6 +55,14 @@ class FolderSyncCoordinator {
   String? get root => _folder?.root;
   bool get canApprovePending => _pendingApprovalHash != null;
 
+  void _resetCaches() {
+    _verifiedSnapshots.clear();
+    _verifiedOperations.clear();
+    _cachedLocalOperations.clear();
+    _lastSnapshotStateHash = null;
+    _lastRemoteSignature = null;
+  }
+
   Future<void> start() async {
     final preferences = await SharedPreferences.getInstance();
     final root = preferences.getString('finance_sync_root');
@@ -53,6 +71,7 @@ class FolderSyncCoordinator {
       return;
     }
     _folder = SyncFolder.fromRoot(root);
+    _resetCaches();
     _schedule();
     await syncNow();
   }
@@ -64,6 +83,7 @@ class FolderSyncCoordinator {
     await preferences.setString('finance_sync_root', root);
     await preferences.remove(_approvedIntegrityFaultKey);
     _folder = SyncFolder.fromRoot(root);
+    _resetCaches();
     _schedule();
     await syncNow();
     return true;
@@ -75,13 +95,32 @@ class FolderSyncCoordinator {
     await preferences.remove(_approvedIntegrityFaultKey);
     _folder = null;
     _timer?.cancel();
+    _watchDebounce?.cancel();
+    await _watchSubscription?.cancel();
+    _watchSubscription = null;
     _pendingApprovalHash = null;
+    _resetCaches();
     _emit(const FolderSyncStatus(phase: FolderSyncPhase.disabled));
   }
 
   void _schedule() {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(seconds: 4), (_) => syncNow());
+    _watchDebounce?.cancel();
+    unawaited(_watchSubscription?.cancel());
+    _watchSubscription = null;
+
+    final watcher = _folder?.watch();
+    if (watcher != null) {
+      _watchSubscription = watcher.listen((_) {
+        _watchDebounce?.cancel();
+        _watchDebounce = Timer(const Duration(milliseconds: 600), syncNow);
+      }, onError: (_) {});
+      // When native filesystem events are active, poll less frequently as a safety net.
+      _timer = Timer.periodic(const Duration(seconds: 20), (_) => syncNow());
+    } else {
+      // On Android SAF, avoid hammering ContentResolver every 4s.
+      _timer = Timer.periodic(const Duration(seconds: 15), (_) => syncNow());
+    }
   }
 
   Future<void> approvePendingSync() async {
@@ -94,23 +133,46 @@ class FolderSyncCoordinator {
     final folder = _folder;
     if (folder == null || _running) return;
     _running = true;
-    _emit(const FolderSyncStatus(phase: FolderSyncPhase.syncing));
+    final previousStatus = _currentStatus;
     try {
       var remoteFiles = (await folder.listFiles()).toSet();
-      final integrityFaults = <String>[];
       final localOperations = await repository.localOperationFiles();
+      final currentLocalStateHash = contentHash(
+        portableFinanceState(repository.state),
+      );
+      final remoteSignature =
+          '${(remoteFiles.toList()..sort()).join('|')}::${localOperations.length}::$currentLocalStateHash';
+
+      // Fast path: if nothing changed on disk or in local state and we are already idle,
+      // skip re-reading files or emitting redundant syncing/idle status churn.
+      if (approvedCandidateHash == null &&
+          _pendingApprovalHash == null &&
+          previousStatus.phase == FolderSyncPhase.idle &&
+          _lastRemoteSignature == remoteSignature) {
+        return;
+      }
+
+      _emit(const FolderSyncStatus(phase: FolderSyncPhase.syncing));
+      final integrityFaults = <String>[];
+
       for (final file in localOperations) {
         String? source;
         try {
-          source = await file.readAsString();
-          final operation = await repository.readLocalOperation(file);
+          var operation = _cachedLocalOperations[file.path];
+          if (operation == null) {
+            source = await file.readAsString();
+            operation = await repository.readLocalOperation(file);
+            _cachedLocalOperations[file.path] = operation;
+          }
           if (remoteFiles.contains(operation.relativePath)) continue;
           await folder.writeText(
             operation.relativePath,
             const JsonEncoder.withIndent(' ').convert(operation.toJson()),
           );
           remoteFiles.add(operation.relativePath);
+          _verifiedOperations[operation.relativePath] = operation;
         } catch (_) {
+          _cachedLocalOperations.remove(file.path);
           integrityFaults.add(
             _faultFingerprint('Invalid local operation', file.path, source),
           );
@@ -126,8 +188,14 @@ class FolderSyncCoordinator {
               )
               .toList()
             ..sort();
+      _verifiedSnapshots.removeWhere((k, _) => !remoteFiles.contains(k));
       final remoteSnapshots = <FinanceSnapshot>[];
       for (final path in snapshotPaths) {
+        final cached = _verifiedSnapshots[path];
+        if (cached != null) {
+          remoteSnapshots.add(cached);
+          continue;
+        }
         String? source;
         try {
           source = await folder.readText(path);
@@ -146,6 +214,7 @@ class FolderSyncCoordinator {
               'snapshot identity does not match path',
             );
           }
+          _verifiedSnapshots[path] = snapshot;
           remoteSnapshots.add(snapshot);
         } catch (_) {
           integrityFaults.add(
@@ -171,27 +240,32 @@ class FolderSyncCoordinator {
               )
               .toList()
             ..sort();
+      _verifiedOperations.removeWhere((k, _) => !remoteFiles.contains(k));
       final folderOperations = <FinanceOperation>[];
       final operationIdentities = <String, String>{};
       final operationSequences = <String, String>{};
       for (final path in operationPaths) {
         String? source;
         try {
-          source = await folder.readText(path);
-          if (utf8.encode(source).length > _maximumOperationBytes) {
-            throw const FormatException('operation exceeds the size limit');
-          }
-          final raw = jsonDecode(source);
-          if (raw is! Map) {
-            throw const FormatException('operation is not a JSON object');
-          }
-          final operation = FinanceOperation.fromJson(
-            raw.map((key, value) => MapEntry(key.toString(), value)),
-          );
-          if (operation.relativePath != path) {
-            throw const FormatException(
-              'operation identity does not match path',
+          var operation = _verifiedOperations[path];
+          if (operation == null) {
+            source = await folder.readText(path);
+            if (utf8.encode(source).length > _maximumOperationBytes) {
+              throw const FormatException('operation exceeds the size limit');
+            }
+            final raw = jsonDecode(source);
+            if (raw is! Map) {
+              throw const FormatException('operation is not a JSON object');
+            }
+            operation = FinanceOperation.fromJson(
+              raw.map((key, value) => MapEntry(key.toString(), value)),
             );
+            if (operation.relativePath != path) {
+              throw const FormatException(
+                'operation identity does not match path',
+              );
+            }
+            _verifiedOperations[path] = operation;
           }
           final existingHash = operationIdentities[operation.opId];
           if (existingHash != null && existingHash != operation.operationHash) {
@@ -209,6 +283,7 @@ class FolderSyncCoordinator {
           operationSequences[sequenceKey] = operation.opId;
           folderOperations.add(operation);
         } catch (_) {
+          _verifiedOperations.remove(path);
           integrityFaults.add(
             _faultFingerprint('Invalid operation', path, source),
           );
@@ -273,24 +348,33 @@ class FolderSyncCoordinator {
         return;
       }
 
-      // A complete immutable snapshot makes this folder sufficient to recover
-      // the app on a clean device. Operations remain for concurrent merging.
-      final currentSnapshot = await repository.createPortableSnapshot();
-      if (latestSnapshot?.snapshotHash == currentSnapshot.snapshotHash) {
-        if (repository.lastLoadedSnapshotId != latestSnapshot!.snapshotId) {
-          await repository.markSnapshotAvailable(latestSnapshot.snapshotId);
+      // Only build and write a new portable snapshot when the state hash has
+      // changed or no snapshot exists yet.
+      if (latestSnapshot == null ||
+          _lastSnapshotStateHash != result.candidateHash) {
+        final currentSnapshot = await repository.createPortableSnapshot();
+        if (latestSnapshot?.snapshotHash == currentSnapshot.snapshotHash) {
+          if (repository.lastLoadedSnapshotId != latestSnapshot!.snapshotId) {
+            await repository.markSnapshotAvailable(latestSnapshot.snapshotId);
+          }
+        } else {
+          await folder.writeText(
+            currentSnapshot.relativePath,
+            const JsonEncoder.withIndent(
+              '  ',
+            ).convert(currentSnapshot.toJson()),
+          );
+          remoteFiles.add(currentSnapshot.relativePath);
+          _verifiedSnapshots[currentSnapshot.relativePath] = currentSnapshot;
+          await repository.markSnapshotAvailable(currentSnapshot.snapshotId);
+          remoteSnapshots.add(currentSnapshot);
         }
-      } else {
-        await folder.writeText(
-          currentSnapshot.relativePath,
-          const JsonEncoder.withIndent('  ').convert(currentSnapshot.toJson()),
-        );
-        remoteFiles.add(currentSnapshot.relativePath);
-        await repository.markSnapshotAvailable(currentSnapshot.snapshotId);
-        remoteSnapshots.add(currentSnapshot);
+        _lastSnapshotStateHash = result.candidateHash;
       }
 
       _pendingApprovalHash = null;
+      _lastRemoteSignature =
+          '${(remoteFiles.toList()..sort()).join('|')}::${localOperations.length}::${result.candidateHash}';
       _emit(
         FolderSyncStatus(
           phase: FolderSyncPhase.idle,
@@ -322,6 +406,8 @@ class FolderSyncCoordinator {
 
   Future<void> dispose() async {
     _timer?.cancel();
+    _watchDebounce?.cancel();
+    await _watchSubscription?.cancel();
     await _status.close();
   }
 }

@@ -3,10 +3,6 @@
       const _invEnd = _invPeriod.end;
       const rows = filterRows(state.investments || [], search);
 
-      // Period-scoped profit / source-tax per investment. Built from the same
-      // investmentTaxEntries(period) the Tax module uses so a multi-year
-      // instrument's card shows only THIS period's gain, not its lifetime total.
-      // PF ledger entries carry parentId; standalone entries match by name.
       const periodProfitByInv = {};
       const periodTaxByInv = {};
       investmentTaxEntries(_invPeriod).forEach(e => {
@@ -15,7 +11,6 @@
         periodTaxByInv[key] = num(periodTaxByInv[key]) + num(e.taxDeducted);
       });
 
-      // Active for this period: started by period end AND not yet withdrawn/matured by period end
       const activeRows = rows.filter(i => {
         if (i.startDate && i.startDate > _invEnd) return false;
         const isClosedBeforePeriodEnd =
@@ -23,33 +18,22 @@
           i.withdrawalDate && i.withdrawalDate <= _invEnd;
         return !isClosedBeforePeriodEnd;
       });
-      // Historical: withdrawn/matured investments whose closure falls within or before the period
       const historicalRows = rows.filter(i =>
         (i.status === 'withdrawn' || i.status === 'matured') &&
         (!i.withdrawalDate || i.withdrawalDate <= _invEnd)
       );
 
-      // Collect all PF investments with non-empty ledgers (for the folded
-      // ledger rendering inside the PF card's <details>).
       const pfLedgerById = {};
       activeRows.forEach(i => {
         if (i.type === 'provident_fund' && Array.isArray(i.pfLedger) && i.pfLedger.length > 0) pfLedgerById[i.id] = i.pfLedger;
       });
 
-      // ── KPI strip ── Sums over active holdings only, period-aware. Derived
-      // purely from existing fields — no new tax logic. "Invested" = principal,
-      // "Current" = accruedValue at period end, "Total Gain" = current − invested,
-      // "Period Gain" = this AY's taxable profit (same source the Tax tab uses).
       const kpiInvested = activeRows.reduce((s, i) => s + num(i.principal), 0);
       const kpiCurrent   = activeRows.reduce((s, i) => s + num(accruedValue(i, _invEnd)), 0);
       const kpiTotalGain = kpiCurrent - kpiInvested;
       const kpiPeriodGain = activeRows.reduce((s, i) => s + num(periodProfitByInv[i.id] || 0), 0);
       const totalGainPct = kpiInvested > 0 ? (kpiTotalGain / kpiInvested) * 100 : 0;
 
-      // ── Allocation legend ── Same type-bucketing the donut uses, exposed as
-      // an HTML list with values + % so the numbers are readable/selectable
-      // (the in-canvas legend had no amounts). Swatch colors mirror the chart's
-      // palette so legend slices match donut slices.
       const ALLOC_COLORS = ["#2d6a4f","#52b788","#95d5b2","#c0392b","#e67e22","#285f91","#8e44ad","#2c3e50"];
       const allocTypeMap = {};
       activeRows.forEach(i => {
@@ -64,13 +48,10 @@
         mutual_fund: "Mutual fund", provident_fund: "Provident fund", other: "Other"
       };
       const typeBadge = t => TYPE_LABELS[t] || (t || "other").replace(/_/g, " ");
+      const typeChip = t => `<span class="tchip ${escapeHtml(String(t || "other").toLowerCase())}">${escapeHtml(typeBadge(t))}</span>`;
 
-      // ── Per-card derived metrics ── Yield % = (current/principal − 1) × 100;
-      // annualised only when a startDate exists. Maturity progress uses the
-      // window [startDate, maturityDate] clamped to period end.
       const gainState = (amt) => amt > 0 ? "up" : (amt < 0 ? "down" : "flat");
-      const arrowFor  = (amt) => amt > 0 ? "▲" : (amt < 0 ? "▼" : "■");
-      // CSS color class for KPI values (positive green / negative red).
+      const arrowFor  = (amt) => amt > 0 ? "▲" : (amt < 0 ? "▼" : "•");
       const gsFor = (amt) => amt > 0 ? "positive" : (amt < 0 ? "negative" : "");
 
       function yieldPct(i) {
@@ -99,11 +80,6 @@
         return { pct, start: i.startDate, maturity: i.maturityDate, done: asOf >= md };
       }
 
-      // One full-width ledger row per investment. Two-zone flex: left zone holds
-      // title + meta + an inset details box (toggled by the whole-row click);
-      // right zone is a fixed 200px right-aligned numeric column (value on top,
-      // gain + yield beneath) so every value lines up across all rows. A
-      // chevron sits between the kebab and the side; one row open at a time.
       function invCard(i, opts = {}) {
         const isHist = !!opts.historical;
         const principal = num(i.principal);
@@ -115,20 +91,40 @@
         const taxMethod = i.profitTaxMethod || defaultProfitTaxMethod(i.type);
         const mat = isHist ? null : maturityMeta(i);
 
-        const faceGain = isHist ? num(i.principalReturned || principal) - principal : gain;
+        const faceGain = isHist
+          ? (num(i.taxableProfit) || (num(i.principalReturned || principal) - principal))
+          : gain;
         const gs = gainState(faceGain);
         const faceValue = isHist ? (i.principalReturned || principal) : current;
+        const statusChip = isHist
+          ? `<span class="tchip other">${escapeHtml(i.status || "closed")}</span>`
+          : "";
 
-        return
+        let subMetricHtml = "";
+        if (faceGain !== 0) {
+          const pctStr = principal > 0 ? ` (${(Math.abs(faceGain) / principal * 100).toFixed(1)}%)` : "";
+          subMetricHtml = `<span class="inv-gain ${gs}">${arrowFor(faceGain)} ${money(Math.abs(faceGain))}${pctStr}</span>`;
+        } else {
+          subMetricHtml = `<span class="inv-gain flat">Principal ${money(principal)}</span>`;
+        }
+
+        return `
           <div class="row-card inv-row" data-inv-row>
             <div class="inv-main">
-              <h3>${escapeHtml(i.name)}</h3>
-              <div class="inv-meta">${typeBadge(i.type)}${i.institution ? " · " + escapeHtml(i.institution) : ""}${isHist ? " · " + escapeHtml(i.status || "closed") : ""}</div>
+              <div class="inv-title-row">
+                <h3>${escapeHtml(i.name)}</h3>
+              </div>
+              <div class="inv-meta">
+                ${typeChip(i.type)}
+                ${statusChip}
+                ${i.institution ? `<span class="inv-inst">${escapeHtml(i.institution)}</span>` : ""}
+                ${!isHist && i.maturityDate ? `<span class="inv-mat-pill">Matures ${i.maturityDate}</span>` : ""}
+              </div>
               <div class="inv-detail-box">
                 <div class="inv-detail-grid">
                   <span class="k">Principal</span><span class="v">${money(principal)}</span>
-                  ${isHis
-                    ? `<span class="k">Returned</span><span class="v">${money(i.principalReturned || principal)}</span>
+                  ${isHist
+                    ? `<span class="k">Returned</span><span class="v">${money(i.principalReturned || principal)}</span>`
                     : `<span class="k">Current value</span><span class="v">${money(current)}</span>`}
                   ${i.startDate ? `<span class="k">Started</span><span class="v">${i.startDate}</span>` : ""}
                   ${isHist && i.withdrawalDate ? `<span class="k">Closed</span><span class="v">${i.withdrawalDate}</span>` : ""}
@@ -139,34 +135,36 @@
                   <span class="k">Source tax (${_invPeriod.label})</span><span class="v negative">${money(periodTax)}</span>
                   ${i.withdrawalAccountId ? `<span class="k">Deposited to</span><span class="v">${escapeHtml(accountName(i.withdrawalAccountId))}</span>` : ""}
                 </div>
-                ${mat ?
+                ${mat ? `
                   <div class="mat-bar"><span style="width:${mat.pct}%"></span></div>
-                  <div class="mat-meta"><span>${mat.start}</span><span>${mat.done ? "matured" : mat.maturity}</span></div>
+                  <div class="mat-meta"><span>${mat.start}</span><span>${mat.done ? "matured" : mat.maturity} (${mat.pct}%)</span></div>
                 ` : ""}
                 <div class="chips" style="margin-top:8px;">
                   ${i.rebateEligible ? chip("Rebate eligible") : ""}
                   ${taxMethod === "slab"
-                    ? `<span class="chip" style="background:#e8f1fb;color:#285f91;">Slab-taxed</span>
-                    : `<span class="chip" style="background:#d8f3dc;color:#2d6a4f;">Final tax</span>`}
+                    ? `<span class="chip" style="background:var(--blue-pale);color:var(--blue);">Slab-taxed</span>`
+                    : `<span class="chip" style="background:var(--green-pale);color:var(--green);">Final tax</span>`}
                   ${!isHist && i.startDate && withinPeriod(i.startDate, _invPeriod) ? chip("Current year") : ""}
                   ${chip(investmentFundingLabel(i))}
                 </div>
                 ${pfLedgerById[i.id] ? providentFundLedgerView(i) : ""}
-                ${i.notes ? `<div class="full" style="font-size:11px;color:var(--muted);margin-top:8px;white-space:pre-wrap;">${escapeHtml(i.notes)}</div>` : ""}
+                ${i.notes ? `<div class="full" style="font-size:11.5px;color:var(--muted);margin-top:8px;white-space:pre-wrap;">${escapeHtml(i.notes)}</div>` : ""}
               </div>
             </div>
             <div class="inv-side">
               <span class="inv-value">${money(faceValue)}</span>
-              <span class="inv-gain ${gs}">${arrowFor(faceGain)} ${money(Math.abs(faceGain))}${faceGain !== 0 ? ` (${(Math.abs(faceGain) / (principal || 1) * 100).toFixed(1)}%)` : ""}</span>
-              ${!isHist && yld && yld.total !== 0 ? `<span class="inv-gain yield">yield ${yld.total.toFixed(1)}%${yld.annual != null ? ` · ${yld.annual.toFixed(1)}%/yr` : ""}</span>` : ""}
+              ${subMetricHtml}
+              ${!isHist && yld && yld.annual != null && Math.abs(yld.annual) >= 0.05 ? `<span class="inv-yield-sub">${yld.annual.toFixed(1)}%/yr annualized</span>` : ""}
             </div>
-            <span class="inv-chevron">▸</span>
-            <div class="actions">${rowMenu(opts.menu || [])}</div>
+            <div class="inv-controls">
+              <span class="inv-chevron" aria-hidden="true">▸</span>
+              <div class="actions">${rowMenu(opts.menu || [])}</div>
+            </div>
           </div>
         `;
       }
 
-      return
+      return `
         ${recordTabs("investments")}
 
         <!-- KPI strip -->
@@ -183,7 +181,7 @@
           <div class="alloc-wrap">
             <div class="alloc-canvas"><div style="width:280px;"><canvas id="allocationChart"></canvas></div></div>
             <ul class="alloc-legend">
-              ${allocEntries.length ? allocEntries.map(([t, v], idx) =>
+              ${allocEntries.length ? allocEntries.map(([t, v], idx) => `
                 <li>
                   <span class="swatch" style="background:${ALLOC_COLORS[idx % ALLOC_COLORS.length]}"></span>
                   <span class="lg-name">${typeBadge(t)}</span>
@@ -197,8 +195,8 @@
 
         <!-- Active investments -->
         <div class="panel">
-          <div class="panel-head"><h2>Active Investments</h2><button data-add="investments">Add Investment</button></div>
-          <div class="panel-body">
+          <div class="panel-head"><h2>Active Investments <span class="muted" style="font-weight:500;font-size:12px;">(${activeRows.length})</span></h2><button class="primary" data-add="investments">+ Add Investment</button></div>
+          <div class="panel-body" style="padding:0;">
             ${activeRows.length
               ? `<div class="inv-rows split-list">${activeRows.map(i => invCard(i, {
                   menu: [
@@ -208,17 +206,17 @@
                     { sep: true },
                     { delete: `investments:${i.id}`, label: "Delete", danger: true }
                   ]
-                })).join("")}</div>
+                })).join("")}</div>`
               : `<div class="empty" style="padding:24px;">No active investments.</div>`}
           </div>
         </div>
 
         <!-- Historical / past investments -->
-        ${historicalRows.length ?
+        ${historicalRows.length ? `
           <div class="panel" style="margin-top:16px;">
-            <div class="panel-head"><h2 style="color:var(--muted);">Past Investments</h2>
+            <div class="panel-head"><h2>Past Investments <span class="muted" style="font-weight:500;font-size:12px;">(${historicalRows.length})</span></h2>
             <span style="font-size:12px;color:var(--muted);">withdrawn / matured · retained for tax filing</span></div>
-            <div class="panel-body">
+            <div class="panel-body" style="padding:0;">
               <div class="inv-rows split-list">
                 ${historicalRows.map(i => invCard(i, {
                   historical: true,
@@ -234,29 +232,28 @@
           </div>
         ` : ''}
       `;
-
     }
-          function providentFundLedgerView(inv) {
+
+    function providentFundLedgerView(inv) {
       const ledger = Array.isArray(inv.pfLedger) ? inv.pfLedger : [];
       if (!ledger.length) return `<div class="empty" style="padding:10px 0;text-align:left">No PF yearly entries yet.</div>`;
 
-      // Sort ledger by date (most recent first) for better viewing
       const sortedLedger = [...ledger].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
 
-      return
-        <div style="border:1px solid var(--border); border-radius:8px; padding:8px; max-height:220px; overflow-y:auto; margin-top:6px;">
-          ${sortedLedger.map(entry =>
-            <div style="display:flex; flex-direction:column; gap:4px; padding:6px 0; border-bottom:1px solid var(--border);">
+      return `
+        <div style="border:1px solid var(--border); border-radius:8px; padding:8px 12px; max-height:240px; overflow-y:auto; margin-top:8px; background:var(--surface);">
+          ${sortedLedger.map(entry => `
+            <div style="display:flex; flex-direction:column; gap:4px; padding:7px 0; border-bottom:1px solid var(--border);">
               <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; font-size:12px;">
                 <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                   <span style="font-weight:600; white-space:nowrap;">${entry.date || "N/A"}</span>
-                  <span style="color:var(--muted);">|</span>
+                  <span style="color:var(--muted);">·</span>
                   <span>Contribution: <strong>${money(entry.principal)}</strong></span>
-                  <span style="color:var(--muted);">|</span>
+                  <span style="color:var(--muted);">·</span>
                   <span style="color:var(--green);">Gain: <strong>${money(entry.taxableProfit)}</strong></span>
-                  <span style="color:var(--muted);">|</span>
+                  <span style="color:var(--muted);">·</span>
                   <span>Balance: <strong>${money(entry.currentValue || entry.principal)}</strong></span>
-                  <span style="color:var(--muted);">|</span>
+                  <span style="color:var(--muted);">·</span>
                   <span style="color:var(--red);">Tax: <strong>${money(entry.taxDeducted)}</strong></span>
                 </div>
                 <div style="display:flex; gap:4px; flex-shrink:0;">
@@ -268,7 +265,7 @@
                   ])}
                 </div>
               </div>
-              ${entry.notes ?
+              ${entry.notes ? `
                 <details style="font-size:11px; color:var(--muted); margin-top:2px;">
                   <summary style="cursor:pointer; color:var(--green-light);">Show Full Details</summary>
                   <div style="padding:6px 8px; background:var(--surface-soft); border-radius:4px; margin-top:4px; white-space:pre-wrap; word-break:break-word;">${escapeHtml(entry.notes)}</div>
@@ -279,11 +276,11 @@
         </div>
       `;
     }
-                        function taxView() {
-      // Use existing utilities
+
+    function taxView() {
       const summary = yearTaxSummary();
       const period = summary.period;
-      const formatBD = val => Math.round(val).toLocaleString("en-IN"); // SAFE: defined locally
+      const formatBD = val => isPrivacyMode() ? "••••••" : Math.round(val).toLocaleString("en-IN");
       const taxRules = getTaxRulesForYear(period.label);
       const stdDed = taxRules.standardDeduction || { fraction: 0.3333, cap: 500000 };
       const deduction = Math.min(summary.ordinaryIncome * stdDed.fraction, stdDed.cap);
@@ -291,7 +288,6 @@
       const slabInfo = getTaxSlabs(taxableIncome, period.label);
       const grossSlabTax = slabInfo.totalGrossTax;
 
-      // --- REBATE CALCULATIONS ---
       const rebateDefaults = { rate: 0.15, investmentCapPercent: 0.20, maxCapAbsolute: 10000000 };
       const rp = { ...rebateDefaults, ...(taxRules.rebateParams || {}) };
       const rebateRate = num(rp.rate);
@@ -308,11 +304,9 @@
       const maxPrincipalInvestible = Math.round(Math.min(taxableIncome * investmentCapPercent, maxInvestmentCap));
       const absoluteMaxRebate = maxRebateAllowedBySlab;
 
-      // GAP ANALYSIS
       const rebateGapAmount = Math.max(0, absoluteMaxRebate - finalActualRebate);
-      const additionalPrincipalNeeded = rebateGapAmount > 0 ? Math.round(rebateGapAmount / rebateRate) : 0;
+      const additionalPrincipalNeeded = rebateGapAmount > 0 ? Math.round(rebateGapAmount / (rebateRate || 0.15)) : 0;
 
-      // --- INVESTMENT BREAKDOWN (USE EXISTING WITHINPERIOD) ---
       let pfPrincipal = 0;
       let mutualFundPrincipal = 0;
       let otherPrincipal = 0;
@@ -320,7 +314,7 @@
       (state?.investments || []).forEach(inv => {
         if (inv.type === "provident_fund" && Array.isArray(inv.pfLedger)) {
           pfPrincipal += inv.pfLedger
-            .filter(entry => withinPeriod(entry.date, period)) // ✅ SAFE: uses existing function
+            .filter(entry => withinPeriod(entry.date, period))
             .reduce((sum, e) => sum + num(e.principal), 0);
         } else if (inv.type === "mutual_fund" && withinPeriod(inv.startDate, period)) {
           mutualFundPrincipal += num(inv.principal);
@@ -329,19 +323,9 @@
         }
       });
 
-      // --- PREPARE ORDINARY ROWS ---
-      // Salary rows show their cash gross only. The non-cash Employer PF
-      // contribution is aggregated into a single line (sum of pfEmployer from
-      // the start of the financial year to date) so the taxable composition is
-      // transparent without cluttering the table. The total of all rows equals
-      // gross + pfEmployer — the same base the slab calculation uses.
       const totalEmployerPf = summary.salaryRows.reduce((sum, s) => sum + num(s.pfEmployer), 0);
-      // Grouped taxable-income breakdown. Each group carries a label, a tint,
-      // its child rows, and a live subtotal. Empty groups are dropped before
-      // rendering so the list stays clean. The grand total of all group
-      // subtotals equals summary.ordinaryIncome (verified by reconciler).
       const groupTints = {
-        salary: "#d8f3dc", pf: "#e8f1fb", other: "#fbfdfc", slab: "#fff3e0"
+        salary: "var(--green-pale)", pf: "var(--blue-pale)", other: "var(--surface-soft)", slab: "var(--red-pale)"
       };
       const sumGroup = rows => rows.reduce((acc, r) => {
         acc.amount += num(r.amount); acc.taxPaid += num(r.taxPaid); return acc;
@@ -372,10 +356,6 @@
         },
         {
           key: "slab", label: "Slab-taxed investment profit (joins the slab base)", tint: groupTints.slab,
-          // Slab-taxed investment profit (DPS/FDR/mutual funds etc.) is added
-          // into summary.ordinaryIncome, so it must appear here too or the lis
-          // sum is short of the taxable total. Source tax on these is a
-          // prepayment credit against the slab tax on the profit.
           rows: summary.slabTaxEntries
             .filter(i => num(i.taxableProfit))
             .map(i => ({
@@ -385,17 +365,15 @@
         }
       ].map(g => ({ ...g, subtotal: sumGroup(g.rows) }))
        .filter(g => g.rows.length > 0);
-      // Flat view kept for the grand-total footer and any other consumer.
       const ordinaryRows = incomeGroups.flatMap(g => g.rows);
 
       const investmentRows = summary.investmentEntries
         .filter(i => num(i.taxableProfit) || num(i.taxDeducted))
         .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
-      // Split by profit tax treatment for the two investment tables below.
       const finalInvestmentRows = investmentRows.filter(i => i.profitTaxMethod !== "slab");
       const slabInvestmentRows = investmentRows.filter(i => i.profitTaxMethod === "slab");
 
-      const slabRows = slabInfo.rows.map(r =>
+      const slabRows = slabInfo.rows.map(r => `
         <tr>
           <td>${r.label}</td>
           <td class="amount">${r.slice > 0 ? formatBD(r.slice) : "0"}</td>
@@ -410,11 +388,10 @@
           return `<tr><td>${p.label}<br><span class="muted">${p.start} to ${p.end}</span></td><td class="amount">${money(h.ordinaryIncome)}</td><td class="amount">${money(h.investmentIncome)}</td><td class="amount">${money(h.totalTax)}</td><td class="amount">${money(h.taxPaid)}</td><td class="amount ${h.taxDue ? "negative" : "positive"}">${h.taxDue ? money(h.taxDue) : money(h.refundable)}</td></tr>`;
         }).join("");
 
-      // ── Shared context passed to every segment helper. All values above are
-      // unchanged from the pre-redesign taxView(); only the markup dispatch is new.
       const taxCtx = {
         summary, period, formatBD, taxRules, deduction, taxableIncome, slabInfo,
-        grossSlabTax, rp, rebateRateLabel, investmentCapLabel, actualEligibleInvestments, actualRebate,
+        grossSlabTax, rp, rebateRate, investmentCapPercent, maxInvestmentCap,
+        rebateRateLabel, investmentCapLabel, actualEligibleInvestments, actualRebate,
         maxRebateAllowedBySlab, finalActualRebate, maxPrincipalInvestible,
         absoluteMaxRebate, rebateGapAmount, additionalPrincipalNeeded,
         pfPrincipal, mutualFundPrincipal, otherPrincipal,
@@ -423,7 +400,7 @@
       };
       state.taxSeg = state.taxSeg || "summary";
       const segs = [
-        { key: "summary", label: "Summary" },
+        { key: "summary", label: "Summary & Simulator" },
         { key: "breakdown", label: "Breakdown" },
         { key: "investments", label: "Investments" },
         { key: "history", label: "History" }
@@ -434,26 +411,26 @@
         state.taxSeg === "history" ? taxHistorySeg(taxCtx) :
         taxSummarySeg(taxCtx);
 
-      return
+      return `
+        ${recordTabs("tax")}
         ${taxHeroBand(taxCtx)}
         <div class="tax-segs">
-          ${segs.map(s => `<button class="${s.key === state.taxSeg ? "active" : ""}" data-seg="${s.key}">${s.label}</button>`).join("")}
+          ${segs.map(s => `<button type="button" class="${s.key === state.taxSeg ? "active" : ""}" data-seg="${s.key}">${s.label}</button>`).join("")}
         </div>
         ${segBody}
       `;
     }
 
-    // Persistent hero band — the headline answer, visible in every segment.
     function taxHeroBand(ctx) {
       const { summary, period } = ctx;
       const isDue = summary.taxDue > 0;
       const isRefund = summary.refundable > 0;
       const sideLine = isDue
-        ? `<div>TDS paid ${money(summary.salaryTds)}</div><div class="due">Due ${money(summary.taxDue)}</div>
+        ? `<div>TDS paid ${money(summary.salaryTds)}</div><div class="due">Due ${money(summary.taxDue)}</div>`
         : isRefund
-          ? `<div>Paid in full</div><div class="refund">Refund ${money(summary.refundable)}</div>
+          ? `<div>Paid in full</div><div class="refund">Refund ${money(summary.refundable)}</div>`
           : `<div>Paid in full</div><div class="clear">Nothing due</div>`;
-      return
+      return `
         <div class="tax-hero">
           <div>
             <div class="hero-label">Net payable · ${period.label}</div>
@@ -464,9 +441,9 @@
       `;
     }
 
-    // Summary segment — mini KPIs + rebate progress + breakdown + gap callout.
     function taxSummarySeg(ctx) {
-      const { summary, period, formatBD, slabInfo, grossSlabTax,
+      const { summary, period, formatBD, grossSlabTax,
+              taxableIncome, rebateRate, investmentCapPercent, maxInvestmentCap,
               finalActualRebate, absoluteMaxRebate, maxPrincipalInvestible,
               rebateGapAmount, additionalPrincipalNeeded,
               pfPrincipal, mutualFundPrincipal, otherPrincipal,
@@ -474,7 +451,12 @@
       const rebatePct = absoluteMaxRebate > 0
         ? Math.min(100, Math.round((finalActualRebate / absoluteMaxRebate) * 100))
         : 0;
-      return
+
+      const maxSliderAdd = Math.max(additionalPrincipalNeeded, 250000);
+      const stepSlider = maxSliderAdd > 500000 ? 10000 : 5000;
+      const defaultAdd = additionalPrincipalNeeded;
+
+      return `
         <div class="tax-mini-kpis">
           <div class="panel"><div>
             <span>Ordinary slab income</span>
@@ -489,12 +471,12 @@
           <div class="panel"><div>
             <span>Total tax for year</span>
             <strong>${money(summary.totalTax)}</strong>
-            <small>Slab ${money(grossSlabTax - finalActualRebate)}${summary.finalSourceTax ? ` + final source tax ${money(summary.finalSourceTax)}` : ""}</small>
+            <small>Slab ${money(Math.max(0, grossSlabTax - finalActualRebate))}${summary.finalSourceTax ? ` + final source tax ${money(summary.finalSourceTax)}` : ""}</small>
           </div></div>
         </div>
 
         <div class="panel">
-          <div class="panel-head"><h2>Rebate &amp; tax savings</h2></div>
+          <div class="panel-head"><h2>Rebate &amp; tax savings</h2><button data-add="taxPayments">Record Tax Payment</button></div>
           <div class="panel-body split-list">
             <div class="rebate-bar">
               <div style="display:flex; justify-content:space-between; font-size:13px;">
@@ -508,7 +490,7 @@
               </div>
             </div>
 
-            ${syncCard("Max tax saving possible", "3% of your taxable income", money(absoluteMaxRebate))}
+            ${syncCard("Max tax saving possible", "3% of your taxable income (capped by gross slab tax)", money(Math.min(grossSlabTax, absoluteMaxRebate)))}
             ${syncCard("Actual tax saved", `${rebateRateLabel} of eligible investments (capped at max)`, money(finalActualRebate))}
 
             <div style="border-top: 1px solid var(--border); padding-top: 10px; margin-top: 10px;">
@@ -519,7 +501,7 @@
               <div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;">
                 <span>Mutual Fund</span><strong>${money(mutualFundPrincipal)}</strong>
               </div>
-              ${otherPrincipal > 0 ? `<div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;"><span>Other eligible</span><strong>${money(otherPrincipal)}</strong></div>` : ""}
+              ${otherPrincipal > 0 ? `<div style="display:flex; justify-content:space-between; font-size:13px; padding:3px 0;"><span>Other eligible (Sanchayapatra/DPS)</span><strong>${money(otherPrincipal)}</strong></div>` : ""}
               <div style="display:flex; justify-content:space-between; font-size:13px; font-weight:700; padding-top:6px; border-top:1px solid var(--border); margin-top:4px;">
                 <span>Total principal invested</span><span>${money(summary.rebateBase)}</span>
               </div>
@@ -528,33 +510,54 @@
               </div>
             </div>
 
-            ${rebateGapAmount > 0 ?
-              <div class="notice warning" style="margin-top:10px;">
-                <strong>You can save more tax!</strong><br>
-                Invest an additional principal of <strong>BDT ${formatBD(additionalPrincipalNeeded)}</strong> in eligible instruments (Sanchayapatra/DPS/PF) to save an additional <strong>BDT ${formatBD(rebateGapAmount)}</strong> in tax.
-                <br><br>
-                <button data-open="investments" class="primary" style="font-size:12px; padding:4px 12px;">Go to Investments</button>
+            <!-- Interactive What-If Tax-Saving Slider -->
+            <div class="tax-whatif-box" id="taxWhatIfSimulator"
+                 data-base-rebate="${summary.rebateBase}"
+                 data-taxable="${taxableIncome}"
+                 data-gross-slab-tax="${grossSlabTax}"
+                 data-final-source-tax="${summary.finalSourceTax}"
+                 data-tax-paid="${summary.taxPaid}"
+                 data-rebate-rate="${rebateRate}"
+                 data-cap-pct="${investmentCapPercent}"
+                 data-max-cap="${maxInvestmentCap}">
+              <div class="tax-whatif-head">
+                <div>
+                  <span class="workspace-label" style="color:var(--green);">INTERACTIVE SIMULATOR</span>
+                  <h3 style="font-size:14px;margin-top:2px;">Tax-Saving "What-If" Explorer</h3>
+                </div>
+                <button type="button" class="secondary" id="taxWhatIfOptimalBtn" data-optimal="${additionalPrincipalNeeded}" style="font-size:11.5px;padding:4px 10px;">Set to Optimal (${money(additionalPrincipalNeeded)})</button>
               </div>
-            ` :
+              <p class="muted" style="font-size:12px;margin:4px 0 10px;">Drag the slider to simulate investing additional funds in eligible instruments (DPS, Sanchayapatra, Mutual Fund) before June 30.</p>
+              <div class="tax-whatif-slider-row">
+                <label for="taxWhatIfSlider" style="font-size:12px;font-weight:600;display:flex;flex-direction:row;justify-content:space-between;align-items:center;">
+                  <span>Simulated additional investment</span>
+                  <strong id="taxWhatIfAddLabel" style="color:var(--green);font-size:14px;">+${money(defaultAdd)}</strong>
+                </label>
+                <input type="range" id="taxWhatIfSlider" min="0" max="${maxSliderAdd}" step="${stepSlider}" value="${defaultAdd}" style="width:100%;margin-top:6px;accent-color:var(--green);">
+              </div>
+              <div class="tax-whatif-metrics" id="taxWhatIfMetrics"></div>
+            </div>
+
+            ${rebateGapAmount === 0 ? `
               <div class="notice" style="margin-top:10px;">
-                <strong>Congratulations!</strong> You've invested the maximum eligible for the tax rebate — saving the full BDT ${formatBD(absoluteMaxRebate)} allowed by law.
+                <strong>Maximum rebate achieved!</strong> You have already invested enough eligible principal to claim the full BDT ${formatBD(absoluteMaxRebate)} tax rebate allowed by law.
               </div>
-            `}
+            ` : ""}
           </div>
         </div>
       `;
     }
-    // Breakdown segment — two columns: slab-walk ledger | taxable income records.
+
     function taxBreakdownSeg(ctx) {
       const { summary, formatBD, deduction, taxableIncome, slabInfo,
               grossSlabTax, finalActualRebate, incomeGroups } = ctx;
-      const slabLedgerRows = slabInfo.rows.map(r =>
+      const slabLedgerRows = slabInfo.rows.map(r => `
         <div class="lr"><span class="lab">${r.label}</span><span class="amt">${r.slice > 0 ? formatBD(r.slice) : "0"} · ${r.tax > 0 ? formatBD(r.tax) : "0"}</span></div>
       `).join("");
       const grandTotal = incomeGroups.reduce((s, g) => s + g.subtotal.amount, 0);
       const grandTaxPaid = incomeGroups.reduce((s, g) => s + g.subtotal.taxPaid, 0);
 
-      return
+      return `
         <div class="tax-breakdown-grid">
           <div class="panel">
             <div class="panel-head"><h2>How your tax is built</h2></div>
@@ -570,50 +573,50 @@
                 <div class="lr total"><span class="lab">Gross slab tax</span><span class="amt">${formatBD(grossSlabTax)}</span></div>
                 <div class="lr rebate-line"><span class="lab">− Rebate (eligible investments)</span><span class="amt">−${formatBD(finalActualRebate)}</span></div>
                 <div class="div-strong"></div>
-                <div class="lr grand-total"><span class="lab">Ordinary slab tax payable</span><span class="amt">${formatBD(grossSlabTax - finalActualRebate)}</span></div>
+                <div class="lr grand-total"><span class="lab">Ordinary slab tax payable</span><span class="amt">${formatBD(Math.max(0, grossSlabTax - finalActualRebate))}</span></div>
               </div>
             </div>
           </div>
 
           <div class="panel">
             <div class="panel-head"><h2>Taxable income records</h2></div>
-            <div class="panel-body">
+            <div class="panel-body" style="padding:0;">
               <div style="overflow-x: auto;">
-                <table style="width:100%; font-size:12.5px; table-layout:fixed; border-collapse:collapse;">
+                <table class="data-table" style="width:100%; font-size:12.5px; table-layout:fixed; border-collapse:collapse;">
                   <colgroup>
-                    <col style="width:16%"><col style="width:46%"><col style="width:18%"><col style="width:20%">
+                    <col style="width:16%"><col style="width:46%"><col style="width:19%"><col style="width:19%">
                   </colgroup>
                   <thead>
-                    <tr style="border-bottom:1px solid var(--border);">
-                      <th style="text-align:left; padding:6px 8px;">Date</th>
-                      <th style="text-align:left; padding:6px 8px;">Description</th>
-                      <th style="text-align:right; padding:6px 8px;">Amount (BDT)</th>
-                      <th style="text-align:right; padding:6px 8px;">TDS (BDT)</th>
+                    <tr>
+                      <th style="text-align:left;">Date</th>
+                      <th style="text-align:left;">Description</th>
+                      <th class="col-num">Amount (BDT)</th>
+                      <th class="col-num">TDS (BDT)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    ${incomeGroups.length ? incomeGroups.map(g =>
-                      <tr style="background:${g.tint}; border-bottom:1px solid var(--border);">
-                        <td colspan="2" style="padding:7px 8px; font-weight:700; font-size:12px; color:var(--text);">${escapeHtml(g.label)}</td>
-                        <td class="amount" style="text-align:right; padding:7px 8px; font-weight:700; white-space:nowrap;">${formatBD(g.subtotal.amount)}</td>
-                        <td class="amount negative" style="text-align:right; padding:7px 8px; font-weight:700; white-space:nowrap;">${formatBD(g.subtotal.taxPaid)}</td>
+                    ${incomeGroups.length ? incomeGroups.map(g => `
+                      <tr style="background:${g.tint};">
+                        <td colspan="2" style="padding:8px 14px; font-weight:700; font-size:12px; color:var(--text);">${escapeHtml(g.label)}</td>
+                        <td class="amount col-num" style="padding:8px 14px; font-weight:700; white-space:nowrap;">${formatBD(g.subtotal.amount)}</td>
+                        <td class="amount col-num negative" style="padding:8px 14px; font-weight:700; white-space:nowrap;">${formatBD(g.subtotal.taxPaid)}</td>
                       </tr>
-                      ${g.rows.map(r =>
-                        <tr style="border-bottom:1px solid var(--border); color:var(--muted); font-size:12px;">
-                          <td style="text-align:left; padding:5px 8px 5px 20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${r.date || ""}</td>
-                          <td style="text-align:left; padding:5px 8px; word-break:break-word;">↳ ${escapeHtml(r.name || "")}</td>
-                          <td class="amount" style="text-align:right; padding:5px 8px; white-space:nowrap;">${money(r.amount)}</td>
-                          <td class="amount negative" style="text-align:right; padding:5px 8px; white-space:nowrap; font-weight:600;">${money(r.taxPaid)}</td>
+                      ${g.rows.map(r => `
+                        <tr style="color:var(--muted); font-size:12px;">
+                          <td style="text-align:left; padding:6px 14px 6px 22px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${r.date || ""}</td>
+                          <td style="text-align:left; padding:6px 14px; word-break:break-word;">↳ ${escapeHtml(r.name || "")}</td>
+                          <td class="amount col-num" style="padding:6px 14px; white-space:nowrap;">${money(r.amount)}</td>
+                          <td class="amount col-num negative" style="padding:6px 14px; white-space:nowrap; font-weight:600;">${money(r.taxPaid)}</td>
                         </tr>
                       `).join("")}
                     `).join("") : `<tr><td colspan="4" class="empty">No records</td></tr>`}
                   </tbody>
-                  ${incomeGroups.length ?
-                  <tfoot>
-                    <tr style="border-top:2px solid var(--border-strong); font-weight:700;">
-                      <td colspan="2" style="text-align:right; padding:10px 8px;">Total taxable ordinary income</td>
-                      <td class="amount" style="text-align:right; padding:10px 8px;">${formatBD(grandTotal)}</td>
-                      <td class="amount negative" style="text-align:right; padding:10px 8px;">${formatBD(grandTaxPaid)}</td>
+                  ${incomeGroups.length ? `
+                  <tfoot class="tr-total">
+                    <tr>
+                      <td colspan="2" style="text-align:right;">Total taxable ordinary income</td>
+                      <td class="amount col-num">${formatBD(grandTotal)}</td>
+                      <td class="amount col-num negative">${formatBD(grandTaxPaid)}</td>
                     </tr>
                   </tfoot>` : ""}
                 </table>
@@ -623,89 +626,82 @@
         </div>
       `;
     }
-    // Investments segment — final-tax and slab-taxed profit, stacked vertically.
+
     function taxInvestmentsSeg(ctx) {
       const { finalInvestmentRows, slabInvestmentRows } = ctx;
-      return
+      return `
         <div class="panel" style="margin-bottom:14px;">
           <div class="panel-head"><h2>Final-tax investments <span style="font-weight:400;color:var(--muted);font-size:11px;">source tax = final tax</span></h2><button data-open="investments">Manage investments</button></div>
-          <div class="panel-body">
-            ${finalInvestmentRows.length ?
+          <div class="panel-body" style="padding:0;">
+            ${finalInvestmentRows.length ? `
               <div style="overflow-x:auto;">
-                <table style="width:100%; font-size:13px;">
+                <table class="data-table">
                   <thead><tr>
-                    <th style="text-align:left;">Date</th>
-                    <th style="text-align:left;">Instrument</th>
-                    <th style="text-align:right;">Gain (BDT)</th>
-                    <th style="text-align:right;">Source Tax (BDT)</th>
+                    <th class="col-date">Date</th>
+                    <th class="col-main">Instrument</th>
+                    <th class="col-num">Gain (BDT)</th>
+                    <th class="col-num">Source Tax (BDT)</th>
                   </tr></thead>
                   <tbody>
-                    ${finalInvestmentRows.map(i =>
+                    ${finalInvestmentRows.map(i => `
                       <tr>
-                        <td style="text-align:left; white-space:nowrap;">${i.date || ""}</td>
-                        <td style="text-align:left; word-break:break-word;"><strong>${i.name}</strong><br><span class="muted">${i.type}</span></td>
-                        <td class="amount" style="text-align:right; white-space:nowrap;">${money(i.taxableProfit)}</td>
-                        <td class="amount negative" style="text-align:right; white-space:nowrap; font-weight:600;">${money(i.taxDeducted)}</td>
+                        <td class="col-date">${i.date || ""}</td>
+                        <td class="col-main"><strong>${escapeHtml(i.name)}</strong><div class="row-sub">${escapeHtml(i.type)}</div></td>
+                        <td class="amount col-num">${money(i.taxableProfit)}</td>
+                        <td class="amount col-num negative">${money(i.taxDeducted)}</td>
                       </tr>
                     `).join("")}
                   </tbody>
                 </table>
               </div>
-            ` : `<div class="empty">No final-tax investment gains for this year.</div>`}
+            ` : `<div style="padding:16px;"><div class="empty">No final-tax investment gains for this year.</div></div>`}
           </div>
         </div>
 
         <div class="panel">
           <div class="panel-head"><h2>Slab-taxed investments <span style="font-weight:400;color:var(--muted);font-size:11px;">profit in slab, source tax = credit</span></h2></div>
-          <div class="panel-body">
-            ${slabInvestmentRows.length ?
-              <div class="notice" style="margin-bottom:10px;">Profit below is included in the ordinary slab income (Breakdown tab). Source tax shown here is a prepayment credit toward the slab tax on that profit.</div>
+          <div class="panel-body" style="padding:0;">
+            ${slabInvestmentRows.length ? `
+              <div style="padding:12px 16px 0;"><div class="notice">Profit below is included in the ordinary slab income (Breakdown tab). Source tax shown here is a prepayment credit toward the slab tax on that profit.</div></div>
               <div style="overflow-x:auto;">
-                <table style="width:100%; font-size:13px;">
+                <table class="data-table">
                   <thead><tr>
-                    <th style="text-align:left;">Date</th>
-                    <th style="text-align:left;">Instrument</th>
-                    <th style="text-align:right;">Gain (BDT)</th>
-                    <th style="text-align:right;">Source Tax credited (BDT)</th>
+                    <th class="col-date">Date</th>
+                    <th class="col-main">Instrument</th>
+                    <th class="col-num">Gain (BDT)</th>
+                    <th class="col-num">Source Tax credited (BDT)</th>
                   </tr></thead>
                   <tbody>
-                    ${slabInvestmentRows.map(i =>
+                    ${slabInvestmentRows.map(i => `
                       <tr>
-                        <td style="text-align:left; white-space:nowrap;">${i.date || ""}</td>
-                        <td style="text-align:left; word-break:break-word;"><strong>${i.name}</strong><br><span class="muted">${i.type}</span></td>
-                        <td class="amount" style="text-align:right; white-space:nowrap;">${money(i.taxableProfit)}</td>
-                        <td class="amount" style="text-align:right; white-space:nowrap; font-weight:600; color:var(--green);">${money(i.taxDeducted)}</td>
+                        <td class="col-date">${i.date || ""}</td>
+                        <td class="col-main"><strong>${escapeHtml(i.name)}</strong><div class="row-sub">${escapeHtml(i.type)}</div></td>
+                        <td class="amount col-num">${money(i.taxableProfit)}</td>
+                        <td class="amount col-num positive">${money(i.taxDeducted)}</td>
                       </tr>
                     `).join("")}
                   </tbody>
                 </table>
               </div>
-            ` : `<div class="empty">No slab-taxed investment gains for this year.</div>`}
+            ` : `<div style="padding:16px;"><div class="empty">No slab-taxed investment gains for this year.</div></div>`}
           </div>
         </div>
       `;
     }
-    // History segment — previous-year tax tracker table.
+
     function taxHistorySeg(ctx) {
       const { historyRows } = ctx;
-      return
+      return `
         <div class="panel">
           <div class="panel-head"><h2>Previous-year tax tracker</h2></div>
-          <div class="panel-body">
+          <div class="panel-body" style="padding:0;">
             <div style="overflow-x:auto;">
-              ${historyRows ? `<table><thead><tr>
-                <th>Tax year</th><th>Ordinary income</th><th>Investment income</th>
-                <th>Total tax</th><th>Paid/credited</th><th>Gap/refund</th>
-              </tr></thead><tbody>${historyRows}</tbody></table>` : `<div class="empty">No previous-year tax records found.</div>`}
+              ${historyRows ? `<table class="data-table"><thead><tr>
+                <th>Tax year</th><th class="col-num">Ordinary income</th><th class="col-num">Investment income</th>
+                <th class="col-num">Total tax</th><th class="col-num">Paid/credited</th><th class="col-num">Gap/refund</th>
+              </tr></thead><tbody>${historyRows}</tbody></table>` : `<div style="padding:16px;"><div class="empty">No previous-year tax records found.</div></div>`}
             </div>
           </div>
         </div>
       `;
     }
-    /* ════════════════════════════════════════════════════════════════════════
-       PHASE 2/3/4 VIEWS
-       automationPanel (P2, sub-tab of Transactions) · budgetsView (P3) ·
-       forecastPanel (P4, tab inside Planning)
-       ════════════════════════════════════════════════════════════════════════ */
-
-    // ── PHASE 2: Automation sub-tab (embedded in Transactions view) ──
